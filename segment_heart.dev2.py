@@ -16,7 +16,7 @@ from skimage.morphology import watershed
 from skimage.feature import peak_local_max, canny
 import scipy
 from scipy import ndimage as ndi
-from scipy.signal import find_peaks, peak_prominences
+from scipy.signal import find_peaks, peak_prominences#, find_peaks_cwt
 import tifffile
 import matplotlib
 matplotlib.use('Agg')
@@ -31,7 +31,8 @@ parser = argparse.ArgumentParser(description='Read in medaka heart video frames'
 parser.add_argument('-i','--indir', action="store",dest='indir', help='Directory containing tiffs', default=False, required = True)
 parser.add_argument('-w','--well', action="store",dest='well', help='Well Id', default=False, required = True)
 parser.add_argument('-l','--loop', action="store",dest='loop', help='Well frame acquistion loop', default=False, required = True)
-parser.add_argument('-o','--out', action="store",dest='out', help='Output', default=False, required = False)
+parser.add_argument('-f','--fps', action="store",dest='fps', help='Frames per second', default=False, required = False)
+parser.add_argument('-o','--out', action="store",dest='out', help='Output', default=False, required = True)
 args = parser.parse_args()
 
 indir = args.indir
@@ -83,7 +84,8 @@ def processFrame(frame):
 	#cl = clahe.apply(frame_grey)
 
 	#Blur the CLAHE frame
-	blurred_frame = cv2.GaussianBlur(cl, (21, 21), 0)
+	#blurred_frame = cv2.GaussianBlur(cl, (21, 21), 0)
+	blurred_frame = cv2.GaussianBlur(cl, (5, 5), 0) #best
 	#out_frame = cv2.GaussianBlur(old_grey, (5,5), 0)
 
 	return out_frame, frame_grey, blurred_frame
@@ -123,15 +125,15 @@ def diffFrame(frame2, frame1):
 	thresh = abs_diff > triangle
 	thresh = thresh.astype(np.uint8)
 
-	dilation = cv2.dilate(thresh,kernel,iterations = 2)
-	closing = cv2.erode(dilation,kernel,iterations = 1)
+#	dilation = cv2.dilate(thresh,kernel,iterations = 2)
+#	closing = cv2.erode(dilation,kernel,iterations = 1)
 	#Remove noise from thresholded differences by opening (erosion followed by dilation)
 	opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN,kernel)
 #	closing = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE,kernel)
 
         #Find contours based on thresholded frame
-#	contours, hierarchy = cv2.findContours(opening, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-	contours, hierarchy = cv2.findContours(closing, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+	contours, hierarchy = cv2.findContours(opening, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+#	contours, hierarchy = cv2.findContours(closing, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 #	contours, hierarchy = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 
 	#Filter contours based on their area
@@ -144,8 +146,7 @@ def diffFrame(frame2, frame1):
 			filtered_contours.append(contour)
 
 	#Create blank mask
-	rows, cols = opening.shape
-#	rows, cols = thresh.shape
+	rows, cols = thresh.shape
 	mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
 
 	#Draw and fill-in filtered contours on blank mask
@@ -156,6 +157,29 @@ def diffFrame(frame2, frame1):
 
 	#Return the masked frame, the filtered mask and the absolute differences for the 2 frames
 	return masked_frame, mask, abs_diff, thresh 
+
+#Calculate RMSSD
+#Root mean square of successive differences
+def getRMSSD(beat_times):
+
+	#Root mean square of successive differences of successive beats
+	#first calculating each successive time difference between heartbeats in ms. 
+	#Each of value is squared and the result is averaged before the square root of the total is obtained
+
+	#Calculate beat-to-beat times
+	#(time between peaks)
+	peak2peak = [t2 - t1 for t1, t2 in zip(beat_times, beat_times[1:])]
+                
+	#Square peak2peak
+	peak2peak_sq = [i**2 for i in peak2peak]
+
+	#Average squared peak2peak
+	mean_peak2peak_sq = np.mean(peak2peak_sq)
+                
+	#Square root of Average squared peak2peak
+	rmssd = np.sqrt(mean_peak2peak_sq)
+
+	return(rmssd)
 
 print("Reading in frames")
 
@@ -253,7 +277,8 @@ for tiff in well_frames:
 
 	#If tiff empty
 	else:
-		print(tiff + " is empty!")
+		imgs[name] = None
+#		print(tiff + " is empty!")
 
 	#Make dict based on the file data fields
 	try:
@@ -292,7 +317,7 @@ for tiff in well_frames:
 		imgs_meta['time'] = [time]
 #		imgs_meta['time'] = [frame_details[13]]
 
-	crop_img = img[y1:y2, x1:x2]
+	#crop_img = img[y1:y2, x1:x2]
 	crop_size = (x2 - x1) * (y2 - y1)
 	crop_id = (well, loop, crop_size)
 	crop_params[crop_id] = [x1, y1, x2, y2] 
@@ -315,7 +340,6 @@ plt.savefig(out_fig)
 plt.close()
 
 #Threshold based on size of cropped image (will add if necessary eventually)
-
 print("Cropping frames")
 #Uniformly crop image per loop per well based on the circle radii + offset
 well_crop_params = {}
@@ -323,7 +347,7 @@ for well_id in sizes.keys():
 
 	size = sizes[well_id]
 	dimension_counts = Counter(size)
-	frame_size, _  = dimension_counts.most_common(1)[0]
+	frame_size, _ = dimension_counts.most_common(1)[0]
 	crop_id = well_id + (frame_size,)
 	well_crop_params[well_id] = crop_params[crop_id]
 
@@ -334,18 +358,19 @@ imgs_meta = imgs_meta.sort_values(by=['well','loop','frame'], ascending=[True,Tr
 #Reindex pandas df
 imgs_meta = imgs_meta.reset_index(drop=True)
 
-loop_meta = imgs_meta[imgs_meta['loop'] == loop]
+#loop_meta = imgs_meta[imgs_meta['loop'] == loop]
 #Reindex pandas df
-loop_meta = loop_meta.reset_index(drop=True)
+#loop_meta = loop_meta.reset_index(drop=True)
 
 #Frames per loop
 #('WE00048', 'LO001', 'SL117')
-loop_imgs = {}
+#loop_imgs = {}
 loop_times = []
 loop_tiffs = []
 sorted_frames = []
 sorted_times = []
-for index,row in loop_meta.iterrows():
+#for index,row in loop_meta.iterrows():
+for index,row in imgs_meta.iterrows():
 
 	tiff = row['tiff']
 	well = row['well']
@@ -354,38 +379,50 @@ for index,row in loop_meta.iterrows():
 	time = row['time']
 	name = (well, loop, frame)
 	img = imgs[name]
+
 	loop_tiffs.append(tiff)
 	sorted_times.append(time)
 
 	well_id = (well, loop)
-	#Well and loop specific paramters for cropping frame
-	#crop_params[crop_id] = [x1, y1, x2, y2]
-	crop_values = well_crop_params[well_id]
 
-	#crop_img = img[y1 : y2, x1: x2]
-	crop_img = img[crop_values[1] : crop_values[3], crop_values[0] : crop_values[2]]
+	#To deal with empty frames
+	if img is not None:
 
-	loop_imgs[frame] = crop_img
-	sorted_frames.append(crop_img)
-	height, width, layers = crop_img.shape
-	size = (width,height)
+		#Well and loop specific paramters for cropping frame
+		#crop_params[crop_id] = [x1, y1, x2, y2]
+		crop_values = well_crop_params[well_id]
 
-#image_test = tifffile.TiffSequence('170414181030_OlE_ICF2_HR_28C_2x/WE00048---D001--PO01--LO002*.tif', pattern='axes')
-#print(image_test.shape)
+		#crop_img = img[y1 : y2, x1: x2]
+		crop_img = img[crop_values[1] : crop_values[3], crop_values[0] : crop_values[2]]
 
-#total time acquiring frames in seconds
-#timestamp0 = sorted_times[0]
-#timestamp_final = sorted_times[-1]
+#		loop_imgs[frame] = crop_img
+		sorted_frames.append(crop_img)
+		height, width, layers = crop_img.shape
+		size = (width,height)
 
-#total_time = (timestamp_final - timestamp0) / 1000 
-#fps = len(sorted_times) / round(total_time)
+	else:
+#		loop_imgs[frame] = None
+                sorted_frames.append(None)
 
-fps = 13 #will be 30 in final dataset 
+if args.fps:
+	fps = int(args.fps)
+else:
+	#total time acquiring frames in seconds
+	#timestamp0 = sorted_times[0]
+	#timestamp_final = sorted_times[-1]
+
+	#total_time = (timestamp_final - timestamp0) / 1000 
+	#fps = len(sorted_times) / round(total_time)
+	fps = 13 #will be 30 in final dataset 
+
+vid_frames = [i for i in sorted_frames if i is not None]
 fourcc = cv2.VideoWriter_fourcc(*'MJPG')
 out_vid = out_dir + "/embryo.avi"
 out = cv2.VideoWriter(out_vid,fourcc, fps, size)
-for i in range(len(sorted_frames)):
-	out.write(sorted_frames[i])
+#for i in range(len(sorted_frames)):
+for i in range(len(vid_frames)):
+#	out.write(sorted_frames[i])
+	out.write(vid_frames[i])
 out.release()
 
 
@@ -396,7 +433,9 @@ print("Detecting heart RoI")
 #Use this to determine range of movement (i.e. the heart region)
 
 embryo = []
-frame0 = sorted_frames[0]
+#Find first frame that exists
+start_frame = next(x for x, frame in enumerate(sorted_frames) if frame is not None)
+frame0 = sorted_frames[start_frame]
 embryo.append(frame0)
 
 #Process frame0
@@ -411,33 +450,38 @@ heart_roi = np.zeros(shape=[rows, cols], dtype=np.uint8)
 
 #Detect heart region (and possibly blood vessels)
 #Frame j vs. j - 1
-j = 1
+j = start_frame + 1
 while j < len(sorted_frames):
 
 	frame = sorted_frames[j]
 	timestamp  = sorted_times[j]
 	old_timestamp  = sorted_times[j-1]
 	
-	frame_cl, frame_grey, frame_blur = processFrame(frame)
+	#Check if jth frame exists
+	if frame is not None:
+		
+		frame_cl, frame_grey, frame_blur = processFrame(frame)
 
-	#Determine absolute differences between current and previous frame
-	##Frame j vs. j - 1
-#	masked_frame, opening, abs_diff, thresh = diffFrame(frame_blur,old_blur) 
-	masked_frame, opening, abs_diff, thresh = diffFrame(frame_blur,old_blur) 
-	heart_roi = cv2.add(heart_roi, thresh) 
+		#Only compare if both frames exist
+		if frame0 is not None:
 
-#	images2 = [frame,frame_cl, frame_blur,abs_diff]
-#	for i in range(len(images2)):
-#		plt.subplot(2,2,i+1),plt.imshow(images2[i])
-#		plt.xticks([]),plt.yticks([])
-#	plt.savefig("/tmp/test.png")
-#	plt.close()
+			#Determine absolute differences between current and previous frame
+			#Frame j vs. j - 1
+			masked_frame, opening, abs_diff, thresh = diffFrame(frame_blur,old_blur) 
+			heart_roi = cv2.add(heart_roi, thresh) 
 
-	embryo.append(masked_frame)
+#			images2 = [frame,frame_cl, frame_blur,abs_diff]
+#			for i in range(len(images2)):
+#				plt.subplot(2,2,i+1),plt.imshow(images2[i])
+#				plt.xticks([]),plt.yticks([])
+#			plt.savefig("/tmp/test.png")
+#			plt.close()
 
-	# Update the data for the next comparison(s)
-#	old_grey = frame_grey.copy()
-	old_blur = frame_blur.copy()
+			embryo.append(masked_frame)
+
+		# Update the data for the next comparison(s)
+#		old_grey = frame_grey.copy()
+		old_blur = frame_blur.copy()
 
 	j += 1
 
@@ -490,7 +534,7 @@ ax[0, 0].set_title('Embryo',fontsize=10)
 ax[0, 0].axis('off')
 #Summed Absolute Difference
 ax[1, 0].imshow(heart_roi)
-ax[1, 0].set_title('Summed Absolute\nDifferenceis', fontsize=10)
+ax[1, 0].set_title('Summed Absolute\nDifferences', fontsize=10)
 ax[1, 0].axis('off')
 #Heart RoI
 ax[0, 1].imshow(heart_roi_clean)
@@ -506,41 +550,31 @@ ax[1, 1].axis('off')
 plt.savefig(out_fig,bbox_inches='tight')
 plt.close()
 
-from mpl_toolkits.mplot3d import axes3d
-#out_fig = out_dir + "/test.png"
+#from mpl_toolkits.mplot3d import axes3d
+#out_fig = out_dir + "/test.svg"
 #fig = plt.figure()
 #ax = plt.axes(projection='3d')
 #ax.plot_surface(heart_roi,cmap='viridis', edgecolor='none')
 #plt.savefig(out_fig,bbox_inches='tight')
 #plt.close()
 
-
-print(heart_roi.ndim)
-print(heart_roi.values)
-#test = cv2.cvtColor(heart_roi, cv2.COLOR_BGR2GRAY)
-#out_fig = out_dir + "/test.png"
-#fig = plt.figure()
-#plt.imshow(test)
-#ax = plt.axes(projection='3d')
-#ax.plot_surface(heart_roi,cmap='viridis', edgecolor='none')
-#plt.savefig(out_fig,bbox_inches='tight')
-#plt.close()
-#print(heart_roi.dtype)
-#print(type(heart_roi))
-
-
+#print(heart_roi.shape)
+#import plotly.graph_objects as go
+#z = heart_roi
+#sh_0, sh_1 = z.shape
+#x, y = np.linspace(0, 1, sh_0), np.linspace(0, 1, sh_1)
+#fig = go.Figure(data=[go.Surface(z=z, x=x, y=y)])
+#fig.update_layout(title='Heart RoI', autosize=False,margin=dict(l=65, r=50, b=65, t=90))
+##                  width=500, height=500, margin=dict(l=65, r=50, b=65, t=90))
+#fig.write_image(out_fig)
 
 #XX,YY=np.meshgrid(xx,yy)
 #ax3=figure.add_subplot(2,2,3,projection='3d')
 #ax3.plot_surface(XX,YY,slab,rstride=4,cstride=4,cmap='viridis',alpha=0.8)
 
-
-
 #from mpl_toolkits.mplot3d import Axes3D
 #fig = plt.figure()
 #ax = fig.add_subplot(111, projection='3d')
-
-
 
 #for i in range(len(roi_imgs)):
 #	plt.subplot(2,2,i+1),plt.imshow(roi_imgs[i])
@@ -548,7 +582,7 @@ print(heart_roi.values)
 #plt.savefig(out_fig)
 #plt.close()
 
-print(cv2.contourArea(contour))
+#print(cv2.contourArea(contour))
 
 
 print("Determining heart rate (bpm)") 
@@ -564,7 +598,6 @@ if cv2.contourArea(contour) > 1000:
 #	distance = ndi.distance_transform_edt(heart_roi_clean)
 #	local_maxi = peak_local_max(distance, indices=False, footprint=np.ones((3, 3)),labels=heart_roi_clean)
 #	markers = ndi.label(local_maxi)[0]
-##	labels = watershed(-distance, markers, mask=heart_roi_clean)
 #	labels = watershed(-distance, markers, mask=mask)
 
 	heart = []
@@ -574,67 +607,51 @@ if cv2.contourArea(contour) > 1000:
 
 		raw_frame = sorted_frames[i]
 		frame = embryo[i]
-		masked_data = cv2.bitwise_and(raw_frame, raw_frame, mask=mask)
-		masked_grey = cv2.cvtColor(masked_data, cv2.COLOR_BGR2GRAY)
 
-		#raw_grey = cv2.cvtColor(raw_frame[y1 : y1 + h1, x1 : x1 + w1], cv2.COLOR_BGR2GRAY)
-		# Improve contrast with CLAHE (Contrast Limited Adaptive Histogram Equalization)
-		#cl = clahe.apply(raw_grey)
-		#cl2 = cv2.GaussianBlur(cl, (5, 5), 0)
+		if frame is not None:
+			masked_data = cv2.bitwise_and(raw_frame, raw_frame, mask=mask)
+			masked_grey = cv2.cvtColor(masked_data, cv2.COLOR_BGR2GRAY)
 
-		#Edge-detection
-#		edges = canny(cl2)
-#		edges2 = canny(cl2, sigma=3)
-##		edges2 = canny(img_as_float(cl2))
-##		edges2 = canny(img_as_float(cl2), sigma=3)
-##		edge_roberts = roberts(img_as_float(cl2))
-##		edge_sobel = sobel(img_as_float(cl2))
-##		edge_scharr = scharr(img_as_float(cl2))
+			#Create vector of the signal within the region of the heart
+			#Flatten array (matrix) into a vector
+			heart_values = np.ndarray.flatten(masked_grey)
+			#Remove zero elements
+			heart_values = heart_values[np.nonzero(heart_values)]
 
-#		images2 = [cl,cl2,edges,edges2]
-#		for i in range(len(images2)):
-#			plt.subplot(2,2,i+1),plt.imshow(images2[i])
-#			plt.xticks([]),plt.yticks([])
-#		plt.show()
+			#Sum the signal region
+			heart_total = np.sum(heart_values)
+			#Standard deviation for signal in region
+			heart_std = np.std(heart_values)
 
-		#Create vector of the signal within the region of the heart
-		#Flatten array (matrix) into a vector
-		heart_values = np.ndarray.flatten(masked_grey)
-		#Remove zero elements
-		heart_values = heart_values[np.nonzero(heart_values)]
+			cropped_frame = masked_data.copy()[y2 : y2 + h2, x2 : x2 + w2]
+#			cropped_frame = raw_frame.copy()[y : y+h, x : x +w]
 
-		#Sum the signal region
-		heart_total = np.sum(heart_values)
-		#Standard deviation for signal in region
-		heart_std = np.std(heart_values)
+			# split source frame into B,G,R channels
+			b,g,r = cv2.split(frame)
 
-#               images2 = [heart_roi,mask,masked_data,masked_grey]
-#               for i in range(len(images2)):
-#                       plt.subplot(2,2,i+1),plt.imshow(images2[i])
-#                       plt.xticks([]),plt.yticks([])
-#               plt.show()
+			# add a constant to B (blue) channel to highlight the outline of the heart
+			b = cv2.add(b, 100, dst = b, mask = mask, dtype = cv2.CV_8U)
+			masked_frame = cv2.merge((b, g, r))
 
-		cropped_frame = masked_data.copy()[y2 : y2 + h2, x2 : x2 + w2]
-#		cropped_frame = raw_frame.copy()[y : y+h, x : x +w]
+			#Crop based on bounding rectangle
+			cropped_mask = masked_frame.copy()[y2 : y2 + h2, x2 : x2 + w2]
 
-		# split source frame into B,G,R channels
-		b,g,r = cv2.split(frame)
+			#Draw bounding rectangle
+#			cv2.rectangle(masked_frame,(x1,y1),(x1 + w1,y1 + h1),(0,255,0),2)
 
-		# add a constant to B (blue) channel to highlight the outline of the heart
-		b = cv2.add(b, 100, dst = b, mask = mask, dtype = cv2.CV_8U)
-		masked_frame = cv2.merge((b, g, r))
+			#################################
 
-		#Crop based on bounding rectangle
-		cropped_mask = masked_frame.copy()[y2 : y2 + h2, x2 : x2 + w2]
-
-		#Draw bounding rectangle
-#		cv2.rectangle(masked_frame,(x1,y1),(x1 + w1,y1 + h1),(0,255,0),2)
+		#No signal in heart RoI if the frame is empty
+		else:
+			masked_frame = None
+			cropped_mask = None
+#			heart_total = np.nan
+			heart_std = np.nan
+#			heart_mad = np.nan
 
 		embryo[i] = masked_frame
 #		heart.append(cropped_frame)
 		heart_changes.append(cropped_mask)
-
-		#################################
 
 		frame_num = i + 1
 #		sums[frame_num] = heart_total
@@ -647,20 +664,13 @@ if cv2.contourArea(contour) > 1000:
 			time = 0
 			time_elapsed = 0
 
-			#Create blank mask
-#			test = raw_frame.copy()
-#			inv_mask = cv2.bitwise_not(mask)
-#			background = np.full(raw_frame.shape, 255, dtype=np.uint8)
-#			bg = cv2.bitwise_or(background, background, mask = inv_mask)
-
-#			fg = cv2.bitwise_and(raw_frame, raw_frame, mask = mask)
-
-			#Save first frame with the ROI highlighted
-			out_fig =  out_dir + "/masked_frame.png"
-			cv2.imwrite(out_fig,masked_frame)
-#			plt.show(masked_frame)
-#			plt.show()
-#			plt.savefig(out_fig)
+			if masked_frame is not None:
+				#Save first frame with the ROI highlighted
+				out_fig =  out_dir + "/masked_frame.png"
+				cv2.imwrite(out_fig,masked_frame)
+#				plt.show(masked_frame)
+#				plt.show()
+#				plt.savefig(out_fig)
 
 
 		#Time frame i = (frame i - frame i-1) / 1000
@@ -678,20 +688,28 @@ if cv2.contourArea(contour) > 1000:
 	#cv2.rectangle(heart_roi_clean,(x1,y1),(x1 + w1,y1 + h1),255,2)
 
 	out_vid = out_dir + "/heart_changes.avi"
+	vid_frames = [i for i in heart_changes if i is not None]
 	#Make videos
-	height, width, layers = heart_changes[0].shape
+	#height, width, layers = heart_changes[0].shape
+	height, width, layers = vid_frames[0].shape
 	size = (width,height)
 	out1 = cv2.VideoWriter(out_vid,fourcc, fps, size)
-	for i in range(len(heart_changes)):
-		out1.write(heart_changes[i])
+#	for i in range(len(heart_changes)):
+	for i in range(len(vid_frames)):
+#		out1.write(heart_changes[i])
+		out1.write(vid_frames[i])
 	out1.release()
 
 	out_vid = out_dir + "/embryo_changes.avi"
-	height, width, layers = embryo[0].shape
+	vid_frames = [i for i in embryo if i is not None]
+	#height, width, layers = embryo[0].shape
+	height, width, layers = vid_frames[0].shape
 	size = (width,height)
 	out2 = cv2.VideoWriter(out_vid,fourcc, fps, size)
-	for i in range(len(embryo)):
-		out2.write(embryo[i])
+	#for i in range(len(embryo)):
+	for i in range(len(vid_frames)):
+	#	out2.write(embryo[i])
+		out2.write(vid_frames[i])
 	out2.release()
 
 	#Wavelet Transformation
@@ -714,19 +732,14 @@ if cv2.contourArea(contour) > 1000:
 
 	times = np.asarray(times, dtype=float)
 	x = np.asarray(list(stds.values()), dtype=float)
-#	x2 = np.asarray(list(cvs.values()), dtype=float)
-	#x2 = np.asarray(list(medians.values()), dtype=float)
-	#x2 = np.asarray(list(mads.values()), dtype=float)
 	meanX = np.mean(x)
-	#meanX2 = np.mean(x2)
 	#xnorm = x - meanX
-	#xnorm2 = x2 - meanX2
 
 	#Find peaks in heart ROI signal, peaks only those above the mean stdev
 	#Minimum distance of 2 between peaks
-	peaks, _ = find_peaks(x, height = meanX, distance = 2)
-#	peaks2, _ = find_peaks(x2)
-
+	#peaks, _ = find_peaks(x, height = meanX, distance = 2)
+#	peaks, _ = find_peaks(x, height = meanX)
+	peaks, _ = find_peaks(x)
 
 	#Peak prominence
 	prominences = peak_prominences(x,peaks)
@@ -738,55 +751,15 @@ if cv2.contourArea(contour) > 1000:
 	plt.savefig(out_fig,bbox_inches='tight')
 	plt.close()
 
-	#print(contour_heights)
-	print("Prominences")
-	print(prominences)
-	print("Peaks")
-	print(peaks)
-	print("Contours")
-	print(contour_heights)
+	prominent_peaks = [idx for idx, prominence in enumerate(prominences[0]) if prominence > 0.2] 
 
 	#Only calculate if more than 4 beats are detected
-	if len(peaks) > 4:
-
-		#Root mean square of successive interbeat intervals between all successive heartbeats 
-#    		#calculate RMSSD
-		 
-#        for b = 4:size(BeatToBeat,2)
-#            % do RMSSD calculation
-#            RMSSD(b-3) = sqrt(((BeatToBeat(b)-BeatToBeat(b-1))^2 ...
-#                + (BeatToBeat(b-1)-BeatToBeat(b-2))^2 ...
-#                + (BeatToBeat(b-2)-BeatToBeat(b-3))^2)/3);
-
-#            % if RMSSD is higher than threshold its indicated in the
-#            % arrhythmia array (with 1)
-#            if RMSSD(b-3) > RmssdThresh
-#                % 'unacceptable'
-#                arrhythmia(b-3) = 1;
-
-#            else
-#                % 'acceptable';
-#                arrhythmia(b-3) = 0;
-
-  #          end
- #       end
-#    end
-#end
-
-
+	if len(peaks[prominent_peaks]) > 4:
 
 		#times = np.arange(x.size) / fps
-		peak_times = times[peaks]
-		peak_signal = x[peaks]
-
-		#Find signal minima
-		#Full heart beat will only include comlete minimum to maximum cycles
-#		from scipy.signal import argrelextrema
-		# for local minima
-#		argrelextrema(x, np.less)
-
-		# calculate beat-to-beat times
-		#BeatToBeat = diff(timePeak);
+		#peak_times = times[peaks]
+		peak_times = times[peaks[prominent_peaks]]
+		peak_signal = x[peaks[prominent_peaks]]
 
 		beats = len(peaks)
 		#beats per second
@@ -796,10 +769,10 @@ if cv2.contourArea(contour) > 1000:
 
 		out_fig = out_dir + "/bpm_trace.png"
 
-		if bpm < 300 and bpm > 60:
-			bpm_label = "BPM = " +  str(int(bpm))
-		else:
-			bpm_label = "BPM estimate unreliable"
+#		if bpm < 300 and bpm > 60:
+		bpm_label = "BPM = " +  str(int(bpm))
+#		else:
+#			bpm_label = "BPM estimate unreliable"
 
 		plt.plot(times, x)
 		plt.plot(peak_times, peak_signal, "x")
@@ -812,8 +785,58 @@ if cv2.contourArea(contour) > 1000:
 		plt.savefig(out_fig)
 		plt.close()
 
+		#Root mean square of successive differences
+		#first calculating each successive time difference between heartbeats in ms. Then, each of the values is squared and the result is averaged before the square root of the total is obtained
 
+		rmssd = getRMSSD(peak_times)
+
+		#Calculate beat-to-beat times
+		#(time between peaks)
+		peak2peak = [t2 - t1 for t1, t2 in zip(peak_times, peak_times[1:])]
+		print(peak2peak)
+		#Square peak2peak
+		peak2peak_sq = [i**2 for i in peak2peak]
+		print(peak2peak_sq)
+		#Average squared peak2peak
+		mean_peak2peak_sq = np.mean(peak2peak_sq)
+		print(mean_peak2peak_sq)
+		#Square root of Average squared peak2peak
+		rmssd = np.sqrt(mean_peak2peak_sq)
+		print(rmssd)
+
+#		RmssdThresh = 
+#            % arrhythmia array (with 1)
+#            if RMSSD(b-3) > RmssdThresh
+#                % 'unacceptable'
+#                arrhythmia(b-3) = 1;
+
+#            else
+#                % 'acceptable';
+#                arrhythmia(b-3) = 0;
+
+  #          end
+ 
 print("QC for bpm estimate") 
+
+#cl = clahe.apply(raw_grey)
+#cl2 = cv2.GaussianBlur(cl, (5, 5), 0)
+
+##Edge-detection
+#edges = canny(cl2)
+#edges2 = canny(cl2, sigma=3)
+##edges2 = canny(img_as_float(cl2))
+##edges2 = canny(img_as_float(cl2), sigma=3)
+##edge_roberts = roberts(img_as_float(cl2))
+##edge_sobel = sobel(img_as_float(cl2))
+##edge_scharr = scharr(img_as_float(cl2))
+
+#images2 = [cl,cl2,edges,edges2]
+#for i in range(len(images2)):
+#	plt.subplot(2,2,i+1),plt.imshow(images2[i])
+#	plt.xticks([]),plt.yticks([])
+#plt.show()
+
+
 
 #	from scipy import signal
 
@@ -928,10 +951,6 @@ print("QC for bpm estimate")
 #    % with mean
 #    frequency = 1/mean(BeatToBeat);
 #    bpm = frequency*60;
-    
-    
-#%     %calculate std of beat-to-beat times
-#%     stdBeatToBeat = std(BeatToBeat);
     
 #    % calculate RMSSD for last 4 Beats
 #    % only calculate if more than 4 beats are detected
