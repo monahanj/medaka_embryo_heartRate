@@ -12,8 +12,11 @@ import skimage
 from skimage.metrics import structural_similarity
 from skimage.util import compare_images, img_as_ubyte, img_as_float
 from skimage.filters import threshold_triangle, threshold_local, threshold_otsu, roberts, sobel, scharr
-from skimage.morphology import watershed
+from skimage.morphology import watershed, extrema
+from skimage.measure import label
 from skimage.feature import peak_local_max, canny
+from skimage import exposure
+from skimage import color
 import scipy
 from scipy import ndimage as ndi
 from scipy.signal import find_peaks, peak_prominences#, find_peaks_cwt
@@ -84,8 +87,11 @@ def processFrame(frame):
 	#cl = clahe.apply(frame_grey)
 
 	#Blur the CLAHE frame
+	#Kernel numbers must be odd integers
 	#blurred_frame = cv2.GaussianBlur(cl, (21, 21), 0)
-	blurred_frame = cv2.GaussianBlur(cl, (5, 5), 0) #best
+#	blurred_frame = cv2.GaussianBlur(cl, (5, 5), 0) #best
+	blurred_frame = cv2.GaussianBlur(cl, (9, 9), 0) 
+#	blurred_frame = cv2.GaussianBlur(cl, (11, 11), 0) 
 	#out_frame = cv2.GaussianBlur(old_grey, (5,5), 0)
 
 	return out_frame, frame_grey, blurred_frame
@@ -125,16 +131,11 @@ def diffFrame(frame2, frame1):
 	thresh = abs_diff > triangle
 	thresh = thresh.astype(np.uint8)
 
-#	dilation = cv2.dilate(thresh,kernel,iterations = 2)
-#	closing = cv2.erode(dilation,kernel,iterations = 1)
 	#Remove noise from thresholded differences by opening (erosion followed by dilation)
 	opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN,kernel)
-#	closing = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE,kernel)
 
         #Find contours based on thresholded frame
 	contours, hierarchy = cv2.findContours(opening, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-#	contours, hierarchy = cv2.findContours(closing, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-#	contours, hierarchy = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 
 	#Filter contours based on their area
 	filtered_contours = []
@@ -156,7 +157,7 @@ def diffFrame(frame2, frame1):
 	masked_frame = maskFrame(frame,mask)
 
 	#Return the masked frame, the filtered mask and the absolute differences for the 2 frames
-	return masked_frame, mask, abs_diff, thresh 
+	return masked_frame, mask, abs_diff, thresh #, thresh2 
 
 #Calculate RMSSD
 #Root mean square of successive differences
@@ -358,10 +359,6 @@ imgs_meta = imgs_meta.sort_values(by=['well','loop','frame'], ascending=[True,Tr
 #Reindex pandas df
 imgs_meta = imgs_meta.reset_index(drop=True)
 
-#loop_meta = imgs_meta[imgs_meta['loop'] == loop]
-#Reindex pandas df
-#loop_meta = loop_meta.reset_index(drop=True)
-
 #Frames per loop
 #('WE00048', 'LO001', 'SL117')
 #loop_imgs = {}
@@ -419,9 +416,7 @@ vid_frames = [i for i in sorted_frames if i is not None]
 fourcc = cv2.VideoWriter_fourcc(*'MJPG')
 out_vid = out_dir + "/embryo.avi"
 out = cv2.VideoWriter(out_vid,fourcc, fps, size)
-#for i in range(len(sorted_frames)):
 for i in range(len(vid_frames)):
-#	out.write(sorted_frames[i])
 	out.write(vid_frames[i])
 out.release()
 
@@ -467,16 +462,8 @@ while j < len(sorted_frames):
 
 			#Determine absolute differences between current and previous frame
 			#Frame j vs. j - 1
-			masked_frame, opening, abs_diff, thresh = diffFrame(frame_blur,old_blur) 
-			heart_roi = cv2.add(heart_roi, thresh) 
-
-#			images2 = [frame,frame_cl, frame_blur,abs_diff]
-#			for i in range(len(images2)):
-#				plt.subplot(2,2,i+1),plt.imshow(images2[i])
-#				plt.xticks([]),plt.yticks([])
-#			plt.savefig("/tmp/test.png")
-#			plt.close()
-
+			masked_frame, opening, abs_diff, triangle_thresh = diffFrame(frame_blur,old_blur) 
+			heart_roi = cv2.add(heart_roi, triangle_thresh) 
 			embryo.append(masked_frame)
 
 		# Update the data for the next comparison(s)
@@ -485,7 +472,19 @@ while j < len(sorted_frames):
 
 	j += 1
 
+#Get indices of top 500 most changeable pixels
+changeable_pixels = np.unravel_index(np.argsort(heart_roi.ravel())[-250:], heart_roi.shape)
+
+#Create boolean matrix the same size as the RoI image
+maxima = np.zeros((heart_roi.shape), dtype=bool)
+
+#Label pixels based on based on the top changeable pixels
+maxima[changeable_pixels] = True
+label_maxima = label(maxima)
+
+#Threshold heart RoI to generate mask
 heart_roi_clean = cv2.threshold(heart_roi,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+
 #Fill in empty regions (if any) in heart mask
 heart_roi_clean = img_as_ubyte(ndi.binary_fill_holes(heart_roi_clean))
 
@@ -494,21 +493,48 @@ heart_roi_clean = img_as_ubyte(ndi.binary_fill_holes(heart_roi_clean))
 #Opencv to Scikit image
 #image = img_as_float(any_opencv_image)
 
-#elevation_map = sobel(heart_roi)
-
 #Find contours based on thresholded, summed absolute differences
 contours, hierarchy = cv2.findContours(heart_roi_clean, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+
+#Filter contours based on which overlaps witht he most changeable pixels
+overlap = 0
+for i in range(len(contours)):
+	test_contour = contours[i]
+
+	#Create blank mask
+	rows, cols = heart_roi_clean.shape
+	contour_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
+
+	#Calculate overlap with the most changeable pixels i.e. max_opening
+	#Draw and fill-in filtered contours on blank mask (contour has to be in a list)
+	cv2.drawContours(contour_mask, [test_contour], -1, (255), thickness = -1)
+
+	#Find intersection between contour and the top most changeable pixels
+	intersection = np.logical_and(maxima, contour_mask)
+	#Area of intersection = sum of pixels
+	area_of_intersection = intersection.sum()
+	
+	if i == 0:
+		mask = contour_mask
+		overlap = area_of_intersection
+		contour = test_contour
+
+	elif area_of_intersection > overlap:
+		mask = contour_mask
+		overlap = area_of_intersection
+		contour = test_contour
+
 #Take largest contour to be heart
-contour = max(contours, key = cv2.contourArea)
+#contour = max(contours, key = cv2.contourArea)
 
 #Create blank mask
 rows, cols = heart_roi_clean.shape
-mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
 mask_contour = np.zeros(shape=[rows, cols], dtype=np.uint8)
-#Draw and fill-in filtered contours on blank mask (contour has to be in a list)
-cv2.drawContours(mask, [contour], -1, (255),thickness = -1)
 #Draw contour without fill 
 cv2.drawContours(mask_contour, [contour], -1, (255), 3)
+
+#Overlay points on RoI
+overlay = color.label2rgb(label_maxima, image = mask, alpha=0.7, bg_label=0, bg_color=None, colors=[(1, 0, 0)])
 
 #Expand masked region
 mask2 = cv2.dilate(mask,kernel, iterations = 1)
@@ -525,7 +551,7 @@ box1 = [x1,y1, x1+w1,y1+h1]
 
 #Plot heart RoI images
 out_fig = out_dir + "/embryo_heart_roi.png"
-roi_imgs = [heart_roi,heart_roi_clean, mask_contour]
+roi_imgs = [heart_roi,heart_roi_clean, overlay, mask_contour]
 
 fig, ax = plt.subplots(2, 2)
 #First  frame
@@ -541,49 +567,12 @@ ax[0, 1].imshow(heart_roi_clean)
 ax[0, 1].set_title('Thresholded Differences', fontsize=10)
 ax[0, 1].axis('off')
 #Heart RoI Contour
-ax[1, 1].imshow(mask_contour)
-ax[1, 1].set_title('Heart RoI Contour', fontsize=10)
+ax[1, 1].imshow(overlay)
+ax[1, 1].set_title('Heart RoI with Maxima', fontsize=10)
 ax[1, 1].axis('off')
-
-#fig.delaxes(ax[1,1])
 
 plt.savefig(out_fig,bbox_inches='tight')
 plt.close()
-
-#from mpl_toolkits.mplot3d import axes3d
-#out_fig = out_dir + "/test.svg"
-#fig = plt.figure()
-#ax = plt.axes(projection='3d')
-#ax.plot_surface(heart_roi,cmap='viridis', edgecolor='none')
-#plt.savefig(out_fig,bbox_inches='tight')
-#plt.close()
-
-#print(heart_roi.shape)
-#import plotly.graph_objects as go
-#z = heart_roi
-#sh_0, sh_1 = z.shape
-#x, y = np.linspace(0, 1, sh_0), np.linspace(0, 1, sh_1)
-#fig = go.Figure(data=[go.Surface(z=z, x=x, y=y)])
-#fig.update_layout(title='Heart RoI', autosize=False,margin=dict(l=65, r=50, b=65, t=90))
-##                  width=500, height=500, margin=dict(l=65, r=50, b=65, t=90))
-#fig.write_image(out_fig)
-
-#XX,YY=np.meshgrid(xx,yy)
-#ax3=figure.add_subplot(2,2,3,projection='3d')
-#ax3.plot_surface(XX,YY,slab,rstride=4,cstride=4,cmap='viridis',alpha=0.8)
-
-#from mpl_toolkits.mplot3d import Axes3D
-#fig = plt.figure()
-#ax = fig.add_subplot(111, projection='3d')
-
-#for i in range(len(roi_imgs)):
-#	plt.subplot(2,2,i+1),plt.imshow(roi_imgs[i])
-#	plt.xticks([]),plt.yticks([])
-#plt.savefig(out_fig)
-#plt.close()
-
-#print(cv2.contourArea(contour))
-
 
 print("Determining heart rate (bpm)") 
 #Check that area of heart contour has reasonable size
@@ -594,11 +583,6 @@ if cv2.contourArea(contour) > 1000:
 	times = []
 
 	timestamp0 = sorted_times[0]
-
-#	distance = ndi.distance_transform_edt(heart_roi_clean)
-#	local_maxi = peak_local_max(distance, indices=False, footprint=np.ones((3, 3)),labels=heart_roi_clean)
-#	markers = ndi.label(local_maxi)[0]
-#	labels = watershed(-distance, markers, mask=mask)
 
 	heart = []
 	heart_changes = []
@@ -694,9 +678,7 @@ if cv2.contourArea(contour) > 1000:
 	height, width, layers = vid_frames[0].shape
 	size = (width,height)
 	out1 = cv2.VideoWriter(out_vid,fourcc, fps, size)
-#	for i in range(len(heart_changes)):
 	for i in range(len(vid_frames)):
-#		out1.write(heart_changes[i])
 		out1.write(vid_frames[i])
 	out1.release()
 
@@ -706,22 +688,13 @@ if cv2.contourArea(contour) > 1000:
 	height, width, layers = vid_frames[0].shape
 	size = (width,height)
 	out2 = cv2.VideoWriter(out_vid,fourcc, fps, size)
-	#for i in range(len(embryo)):
 	for i in range(len(vid_frames)):
-	#	out2.write(embryo[i])
 		out2.write(vid_frames[i])
 	out2.release()
 
 	#Wavelet Transformation
 	#pywt.wavedec(sample, 'haar', 'smooth') 
 	
-	#label_objects, nb_labels = ndi.label(fill_coins)
-	#>>> sizes = np.bincount(label_objects.ravel())
-	#>>> mask_sizes = sizes > 20
-	#>>> mask_sizes[0] = 0
-	#>>> coins_cleaned = mask_sizes[label_objects]
-
-
 	############################
 	#Quality control heart rate estimate
 	############################
@@ -734,6 +707,17 @@ if cv2.contourArea(contour) > 1000:
 	x = np.asarray(list(stds.values()), dtype=float)
 	meanX = np.mean(x)
 	#xnorm = x - meanX
+
+	#Write Signal to file
+	out_signal = out_dir + "/medaka_heart.signal_stdev.txt"
+	with open(out_signal, 'w') as output:
+
+		output.write("Time" + "\t" + "Signal_stdev" + "\n")
+
+		for i in range(len(times)):
+			time = times[i]
+			signal = x[i]
+			output.write(str(time) + "\t" + str(signal) + "\n")
 
 	#Find peaks in heart ROI signal, peaks only those above the mean stdev
 	#Minimum distance of 2 between peaks
@@ -815,9 +799,40 @@ if cv2.contourArea(contour) > 1000:
 #                arrhythmia(b-3) = 0;
 
   #          end
+
+#scipy.signal.find_peaks
+#minimal distance plus prominence
+
  
 print("QC for bpm estimate") 
+#Heart rate interpolation from Declan O'Regan
 
+#clc; clear all; close all;
+#data= readtable('medaka_heart.signal_stdev.txt');
+#td=data.Time(1):mean(diff(data.Time))/6:data.Time(end);
+#Cubic spline interpolation
+#data_interp=csapi(data.Time,data.Signal_stdev,td);
+#[~,min_locs] = findpeaks(data_interp,'MinPeakDistance',20);
+
+#figure;
+#Fs=round(1/mean(diff(td)));
+#plot(td,data_interp);hold on;
+#plot(td(min_locs),data_interp(min_locs),'rv','MarkerFaceColor','r','LineWidth',2)
+#grid;ylim([7 8.2]);
+#title(sprintf('HRV after interpolation'))
+
+#[Psig,Fsig] = pwelch(data_interp, hanning(3*Fs), [], pow2(14), Fs,'onesided');
+#figure;semilogx(Fsig,10*log10(Psig),'Color',[0, 0.4470, 0.7410],'LineWidth',2);
+#xlabel('Frequency (Hz)','FontSize',12,'FontWeight','bold');ylabel('Power Spectrum (dB/Hz)','FontSize',12,'FontWeight','bold');
+#grid
+#title('Power spectral density of HRV')
+#xlim([2 6]);
+
+
+
+
+
+###########################################
 #cl = clahe.apply(raw_grey)
 #cl2 = cv2.GaussianBlur(cl, (5, 5), 0)
 
@@ -901,6 +916,9 @@ print("QC for bpm estimate")
 #xlabel('Time')
 #ylabel('Amplitude')
 #subplot(2,1,2)
+
+
+
 
 ############################
 
