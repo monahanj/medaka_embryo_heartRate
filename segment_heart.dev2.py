@@ -7,25 +7,25 @@ import glob2
 import numpy as np
 from numpy.fft import fft, hfft, fftfreq, fftshift 
 import cv2
-#import imutils
+
 import skimage
-from skimage.metrics import structural_similarity
 from skimage.util import compare_images, img_as_ubyte, img_as_float
 from skimage.filters import threshold_triangle, threshold_otsu, threshold_yen, roberts, sobel, scharr
-from skimage.morphology import watershed, extrema
 from skimage.measure import label
 from skimage.feature import peak_local_max, canny
-from skimage import exposure
 from skimage import color
+
 import scipy
 from scipy import ndimage as ndi
 from scipy.signal import find_peaks, peak_prominences#, find_peaks_cwt
 from scipy.interpolate import CubicSpline
-import tifffile
+
 import matplotlib
-#matplotlib.use('Agg')
+matplotlib.use('Agg')
 from matplotlib import pyplot as plt
+
 from collections import Counter
+
 import pywt
 
 np.set_printoptions(threshold=np.inf)
@@ -70,16 +70,14 @@ if args.loop:
 		well_frames = glob2.glob(indir + '/*/' + well_id + '*' + loop + '*.tif') + glob2.glob(indir + '/*/' + well_id + '*' + loop + '*.tiff')
 	#If jpeg
 	elif frame_format == "jpeg":
-		well_frames = glob2.glob(indir + '/*/*/' + well_id + '*' + loop + '*.jpg') + glob2.glob(indir + '/*/*/' + well_id + '*' + loop + '*.jpeg')   
+		well_frames = glob2.glob(indir + '/*/' + well_id + '*' + loop + '*.jpg') + glob2.glob(indir + '/*/' + well_id + '*' + loop + '*.jpeg')   
 else:
 	#If tiff
 	if frame_format == "tiff":
 		well_frames = glob2.glob(indir + '/*/*' + well_id + '*.tif') + glob2.glob(indir + '/*/*' + well_id + '*.tiff')
 	#If jpeg
 	elif frame_format == "jpeg":
-		well_frames = glob2.glob(indir + '/*/*/*' + well_id + '*.jpg') + glob2.glob(indir + '/*/*/*' + well_id + '*.jpeg')   
-
-print(well_frames)
+		well_frames = glob2.glob(indir + '/*/*' + well_id + '*.jpg') + glob2.glob(indir + '/*/*' + well_id + '*.jpeg')   
 
 # Improve contrast with CLAHE (Contrast Limited Adaptive Histogram Equalization)
 #https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/py_histogram_equalization.html#histogram-equalization
@@ -151,7 +149,7 @@ def processFrame(frame):
 #	out_frame = cv2.cvtColor(cl, cv2.COLOR_GRAY2BGR)
 
 	#Blur the CLAHE frame
-	#Kernel numbers must be odd integers
+	#Blurring kernel numbers must be odd integers
 #	blurred_frame = cv2.GaussianBlur(cl, (9, 9), 0) 
 	blurred_frame = cv2.GaussianBlur(frame_grey, (9, 9), 0) 
 
@@ -181,27 +179,27 @@ def diffFrame(frame2, frame1):
 	#abs_diff = cv2.morphologyEx(abs_diff, cv2.MORPH_OPEN, kernel) 
 
 	#Yen thresholding on differences
-	yen = threshold_yen(abs_diff)
-	yen_thresh = abs_diff <= yen
+#	yen = threshold_yen(abs_diff)
+#	yen_thresh = abs_diff <= yen
 	#yen_thresh = 255 - yen_thresh.astype(np.uint8)
-	yen_thresh = yen_thresh.astype(np.uint8)
+#	yen_thresh = yen_thresh.astype(np.uint8)
 
 	#Triangle thresholding on differences
 	triangle = threshold_triangle(abs_diff)
 	thresh = abs_diff > triangle
 	thresh = thresh.astype(np.uint8)
 
-	fig, [ax1,ax2] = plt.subplots(1, 2)
+#	fig, [ax1,ax2] = plt.subplots(1, 2)
 
-	ax1.imshow(frame2)
-#	ax1.imshow(yen_thresh)
-#	ax1.set_title('Yen',fontsize=10)
-#	ax1.axis('off')
+#	ax1.imshow(frame2)
+##	ax1.imshow(yen_thresh)
+##	ax1.set_title('Yen',fontsize=10)
+##	ax1.axis('off')
 
-	ax2.imshow(thresh)
-	ax2.set_title('Triangle', fontsize=10)
-	ax2.axis('off')
-	plt.show()
+#	ax2.imshow(thresh)
+#	ax2.set_title('Triangle', fontsize=10)
+#	ax2.axis('off')
+#	plt.show()
 
 	#Remove noise from thresholded differences by opening (erosion followed by dilation)
 #	opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN,kernel)
@@ -304,7 +302,7 @@ for frame in well_frames:
 
 		time = "".join(time)
 		#Remove commas
-		time = time.replace(",", "")
+		time = float(time.replace(",", ""))
 
 	#name = (well, loop, frame_number)
 	name = (plate_pos, loop, frame_number)
@@ -399,7 +397,6 @@ for frame in well_frames:
 
 	#Make dict based on the file data fields
 	try:
-#		imgs_meta['tiff'].append(tiff)
 		imgs_meta['frame'].append(frame)
 		imgs_meta['well'].append(plate_pos) #(frame_details[0])
 		imgs_meta['loop'].append(loop) #(frame_details[3])
@@ -407,7 +404,6 @@ for frame in well_frames:
 		imgs_meta['time'].append(time)
 
 	except KeyError:
-#		imgs_meta['tiff'] = [tiff]
 		imgs_meta['frame'] = [frame]
 		imgs_meta['well'] = [plate_pos] #[frame_details[0]]
 		imgs_meta['loop'] = [loop] #[frame_details[3]]
@@ -506,9 +502,8 @@ else:
 	#fps = len(sorted_times) / round(total_time)
 	fps = 13 #will be 30 in final dataset 
 
-print("Detecting heart RoI")
 
-#Normalise intensities across tiff frames
+#Normalise intensities across frames if tiff images
 if frame_format == "tiff":
 	sorted_frames = normVideo(sorted_frames)
 
