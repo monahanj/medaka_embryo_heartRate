@@ -4,6 +4,8 @@ import argparse
 import pandas as pd
 import os
 import glob2
+import errno
+
 import numpy as np
 from numpy.fft import fft, hfft, fftfreq, fftshift 
 import cv2
@@ -21,7 +23,7 @@ from scipy.signal import find_peaks, peak_prominences#, find_peaks_cwt
 from scipy.interpolate import CubicSpline
 
 import matplotlib
-matplotlib.use('Agg')
+#matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 
 from collections import Counter
@@ -191,9 +193,8 @@ def diffFrame(frame2, frame1):
 
 #	fig, [ax1,ax2] = plt.subplots(1, 2)
 
-#	ax1.imshow(frame2)
-##	ax1.imshow(yen_thresh)
-##	ax1.set_title('Yen',fontsize=10)
+#	ax1.imshow(yen_thresh)
+#	ax1.set_title('Yen',fontsize=10)
 ##	ax1.axis('off')
 
 #	ax2.imshow(thresh)
@@ -201,11 +202,7 @@ def diffFrame(frame2, frame1):
 #	ax2.axis('off')
 #	plt.show()
 
-	#Remove noise from thresholded differences by opening (erosion followed by dilation)
-#	opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN,kernel)
-
         #Find contours based on thresholded frame
-#	contours, hierarchy = cv2.findContours(opening, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 	contours, hierarchy = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 
 	#Filter contours based on their area
@@ -495,13 +492,14 @@ if args.fps:
 	fps = int(args.fps)
 else:
 	#total time acquiring frames in seconds
-	#timestamp0 = sorted_times[0]
-	#timestamp_final = sorted_times[-1]
+	timestamp0 = sorted_times[0]
+	timestamp_final = sorted_times[-1]
 
-	#total_time = (timestamp_final - timestamp0) / 1000 
-	#fps = len(sorted_times) / round(total_time)
-	fps = 13 #will be 30 in final dataset 
+	total_time = (timestamp_final - timestamp0) / 1000 
+	fps = len(sorted_times) / round(total_time)
+	#fps = 13 #will be 30 in final dataset 
 
+print(fps)
 
 #Normalise intensities across frames if tiff images
 if frame_format == "tiff":
