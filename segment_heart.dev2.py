@@ -48,7 +48,7 @@ args = parser.parse_args()
 
 indir = args.indir
 frame_format = args.frame_format
-well_id = args.well
+well_number = args.well
 loop = args.loop
 crop = args.crop
 out_dir = args.out
@@ -69,17 +69,17 @@ if args.loop:
 
 	#If tiff
 	if frame_format == "tiff":
-		well_frames = glob2.glob(indir + '/*/' + well_id + '*' + loop + '*.tif') + glob2.glob(indir + '/*/' + well_id + '*' + loop + '*.tiff')
+		well_frames = glob2.glob(indir + '/*/' + well_number + '*' + loop + '*.tif') + glob2.glob(indir + '/*/' + well_number + '*' + loop + '*.tiff')
 	#If jpeg
 	elif frame_format == "jpeg":
-		well_frames = glob2.glob(indir + '/*/' + well_id + '*' + loop + '*.jpg') + glob2.glob(indir + '/*/' + well_id + '*' + loop + '*.jpeg')   
+		well_frames = glob2.glob(indir + '/*/' + well_number + '*' + loop + '*.jpg') + glob2.glob(indir + '/*/' + well_number + '*' + loop + '*.jpeg')   
 else:
 	#If tiff
 	if frame_format == "tiff":
-		well_frames = glob2.glob(indir + '/*/*' + well_id + '*.tif') + glob2.glob(indir + '/*/*' + well_id + '*.tiff')
+		well_frames = glob2.glob(indir + '/*/*' + well_number + '*.tif') + glob2.glob(indir + '/*/*' + well_number + '*.tiff')
 	#If jpeg
 	elif frame_format == "jpeg":
-		well_frames = glob2.glob(indir + '/*/*' + well_id + '*.jpg') + glob2.glob(indir + '/*/*' + well_id + '*.jpeg')   
+		well_frames = glob2.glob(indir + '/*/*' + well_number + '*.jpg') + glob2.glob(indir + '/*/*' + well_number + '*.jpeg')   
 
 # Improve contrast with CLAHE (Contrast Limited Adaptive Histogram Equalization)
 #https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/py_histogram_equalization.html#histogram-equalization
@@ -254,6 +254,11 @@ def getRMSSD(beat_times):
 
 print("Reading in frames")
 
+#Generate html report from images and videos using jinja2
+#def htmlReport():
+
+#	return(html_report)
+
 #Read all images for a given well
 #>0 returns a 3 channel RGB image. This results in conversion to 8 bit.
 #0 returns a greyscale image. Also results in conversion to 8 bit.
@@ -262,7 +267,6 @@ imgs = {}
 imgs_meta = {}  
 sizes = {}
 crop_params = {}
-#for tiff in well_frames:
 for frame in well_frames:
 
 	fname = os.path.basename(frame)
@@ -496,10 +500,9 @@ else:
 	timestamp_final = sorted_times[-1]
 
 	total_time = (timestamp_final - timestamp0) / 1000 
-	fps = len(sorted_times) / round(total_time)
-	#fps = 13 #will be 30 in final dataset 
+	fps = int(len(sorted_times) / round(total_time))
 
-print(fps)
+	#fps = 13 #will be 30 in final dataset 
 
 #Normalise intensities across frames if tiff images
 if frame_format == "tiff":
@@ -812,7 +815,6 @@ with open(out_signal, 'w') as output:
 
 #Find peaks in heart ROI signal, peaks only those above the mean stdev
 #Minimum distance of 2 between peaks
-#peaks, _ = find_peaks(y, height = meanX)
 peaks, _ = find_peaks(y)
 #peaks2, _ = find_peaks(y,prominence = 0.2)
 
@@ -845,8 +847,6 @@ if len(peaks[prominent_peaks]) > 4:
 	bpm = bps * 60
 	bpm = np.around(bpm) #, decimals=1)
 
-	print(bpm)
-
 	out_fig = out_dir + "/bpm_trace.png"
 
 	if bpm < 300 and bpm > 60:
@@ -856,6 +856,13 @@ if len(peaks[prominent_peaks]) > 4:
 
 	#Signal QC  
 
+	out_file = out_dir + "/heart_rate.txt"
+	#Write bpm to file
+	with open(out_file, 'w') as output:
+	
+		output.write("well\twell_id\tbpm\n")
+
+		output.write(well_number + "\t" + well + "\t" +  str(int(bpm)))
 
 	plt.plot(times, y)
 	plt.plot(peak_times, peak_signal, "x")
@@ -864,7 +871,7 @@ if len(peaks[prominent_peaks]) > 4:
 
 	#Label trace with bpm
 	plt.title(bpm_label)
-	plt.hlines(y = meanY, xmin = times[0], xmax = times[-1], linestyles = "dashed")
+#	plt.hlines(y = meanY, xmin = times[0], xmax = times[-1], linestyles = "dashed")
 	plt.savefig(out_fig)
 	plt.close()
 
@@ -1000,16 +1007,6 @@ print("QC for bpm estimate")
 #xlabel('Time')
 #ylabel('Amplitude')
 #subplot(2,1,2)
-
-
-
-
-############################
-
-#image_sequence = tiff.imread(well_series)
-#image_sequence.shape
-#series1 = tiff.imread(well_series, series=1)
-#series1.shape
 
 #Fourier transform 
 
