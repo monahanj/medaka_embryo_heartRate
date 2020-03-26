@@ -1,2 +1,2 @@
 # medaka_embryo_heartRate
-Estimate heart rate from videos of embryonic medaka fish
+Estimate heart rate for embryonic medaka fish in 96-well plates from 10sec videos.
