@@ -37,13 +37,13 @@ np.set_printoptions(threshold=np.inf)
 #Use this to determine range of movement (i.e. the heart region)
 
 parser = argparse.ArgumentParser(description='Read in medaka heart video frames')
-parser.add_argument('-i','--indir', action="store",dest='indir', help='Directory containing frames', default=False, required = True)
-parser.add_argument('-t','--format', action="store",dest='frame_format', help='Frame format', default='tiff', required = False)
-parser.add_argument('-w','--well', action="store",dest='well', help='Well Id', default=False, required = True)
-parser.add_argument('-l','--loop', action="store",dest='loop', help='Well frame acquistion loop', default=None, required = False)
-parser.add_argument('-c','--crop', action="store",dest='crop', help='Crop frame images', default=True, required = False)
-parser.add_argument('-f','--fps', action="store",dest='fps', help='Frames per second', default=False, required = False)
-parser.add_argument('-o','--out', action="store",dest='out', help='Output', default=False, required = True)
+parser.add_argument('-i','--indir', action="store", dest='indir', help='Directory containing frames', default=False, required = True)
+parser.add_argument('-t','--format', action="store", dest='frame_format', help='Frame format', default='tiff', required = False)
+parser.add_argument('-w','--well', action="store", dest='well', help='Well Id', default=False, required = True)
+parser.add_argument('-l','--loop', action="store", dest='loop', help='Well frame acquistion loop', default=None, required = False)
+parser.add_argument('-c','--crop', action="store", dest='crop', type=bool, help='Crop frame images?', default=True, required = False)
+parser.add_argument('-f','--fps', action="store", dest='fps', help='Frames per second', default=False, required = False)
+parser.add_argument('-o','--out', action="store", dest='out', help='Output', default=False, required = True)
 args = parser.parse_args()
 
 indir = args.indir
@@ -119,6 +119,18 @@ def normVideo(frames):
 		norm_frames.append(norm_frame)
 
 	return(norm_frames)
+
+#Detect eyes from frame
+def detectEyes(frame):
+
+	#Tresholding to detect eyes 
+	frame_grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+	eye_mask = cv2.inRange(frame_grey, 0, 50)
+
+#	#Opening
+#	eye_mask = cv2.morphologyEx(eye_mask, cv2.MORPH_OPEN, kernel)  
+
+	return(eye_mask)
 
 #Pre-process frame
 def processFrame(frame):
@@ -252,7 +264,7 @@ def getRMSSD(beat_times):
 
 	return(rmssd)
 
-print("Reading in frames")
+print("Reading in frames\n")
 
 #Generate html report from images and videos using jinja2
 #def htmlReport():
@@ -418,7 +430,7 @@ img_out = img.copy()
 if crop is True:
 
 	#Threshold based on size of cropped image (will add if necessary eventually)
-	print("Cropping frames")
+	print("Cropping frames\n")
 	#Uniformly crop image per loop per well based on the circle radii + offset
 	well_crop_params = {}
 	for well_id in sizes.keys():
@@ -436,6 +448,7 @@ if crop is True:
 
 out_fig = out_dir + "/embryo.uncropped.png"
 plt.imshow(img_out)
+plt.axis('off')
 plt.savefig(out_fig)
 plt.close()
 
@@ -469,7 +482,7 @@ for index,row in imgs_meta.iterrows():
 	#To deal with empty frames
 	if img is not None:
 
-		#Use cropping parameters to unifrmly crop frames
+		#Use cropping parameters to uniformly crop frames
 		if crop is True:
 
 			#Well and loop specific parameters for cropping frame
@@ -528,6 +541,24 @@ embryo.append(frame0)
 #Process frame0
 old_cl, old_grey, old_blur = processFrame(frame0)
 
+#Detect eyes in all frames
+eye_masks = [detectEyes(frame) for frame in sorted_frames if frame is not None]
+#Combine all individual eye masks  
+#eye_mask = cv2.add(eye_masks[0],eye_masks[1])
+eye_mask = eye_masks[0] + eye_masks[1]
+
+# split source frame into B,G,R channels
+b,g,r = cv2.split(frame0)
+
+# add a constant to r (red) channel to highlight the outline of the heart
+r = cv2.add(r, 100, dst = r, mask = eye_mask, dtype = cv2.CV_8U)
+#masked_frame = cv2.merge((b, g, r))
+eyes_masked = cv2.merge((r, g, b))
+
+
+#[detectEyes(frame) for frame in sorted_frames if frame is not None] 
+#heart_roi = cv2.add(heart_roi, triangle_thresh)
+
 rows, cols, _ = frame0.shape
 heart_roi = np.zeros(shape=[rows, cols], dtype=np.uint8)
 heart_roi2 = np.zeros(shape=[rows, cols], dtype=np.uint8)
@@ -542,7 +573,7 @@ j = start_frame + 1
 while j < len(sorted_frames):
 
 	frame = sorted_frames[j]
-	
+
 	#Check if jth frame exists
 	if frame is not None:
 		
@@ -682,9 +713,9 @@ ax[1, 1].axis('off')
 plt.savefig(out_fig,bbox_inches='tight')
 plt.close()
 
-print("Contour area = " + str(cv2.contourArea(contour)))
+#print("Contour area = " + str(cv2.contourArea(contour)))
 
-print("Determining heart rate (bpm)") 
+print("Determining heart rate (bpm)\n") 
 
 #Signal standard deviation
 #stds = {}
@@ -907,7 +938,7 @@ if len(peaks[prominent_peaks]) > 4:
 #            % 'acceptable';
 #                arrhythmia(b-3) = 0;
  
-print("QC for bpm estimate") 
+#print("QC for bpm estimate") 
 #TODO
 #Heart rate interpolation from Declan O'Regan lab
 
