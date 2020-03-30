@@ -23,7 +23,7 @@ from scipy.signal import find_peaks, peak_prominences#, find_peaks_cwt
 from scipy.interpolate import CubicSpline
 
 import matplotlib
-#matplotlib.use('Agg')
+matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 
 from collections import Counter
@@ -192,27 +192,13 @@ def diffFrame(frame2, frame1):
 	abs_diff = cv2.absdiff(frame2,frame1)
 	#abs_diff = cv2.morphologyEx(abs_diff, cv2.MORPH_OPEN, kernel) 
 
-	#Yen thresholding on differences
-#	yen = threshold_yen(abs_diff)
-#	yen_thresh = abs_diff <= yen
-	#yen_thresh = 255 - yen_thresh.astype(np.uint8)
-#	yen_thresh = yen_thresh.astype(np.uint8)
-
 	#Triangle thresholding on differences
 	triangle = threshold_triangle(abs_diff)
 	thresh = abs_diff > triangle
 	thresh = thresh.astype(np.uint8)
 
-#	fig, [ax1,ax2] = plt.subplots(1, 2)
-
-#	ax1.imshow(yen_thresh)
-#	ax1.set_title('Yen',fontsize=10)
-##	ax1.axis('off')
-
-#	ax2.imshow(thresh)
-#	ax2.set_title('Triangle', fontsize=10)
-#	ax2.axis('off')
-#	plt.show()
+	#Opening to remove noise
+	thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
 
         #Find contours based on thresholded frame
 	contours, hierarchy = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
@@ -519,10 +505,14 @@ else:
 
 #Normalise intensities across frames if tiff images
 if frame_format == "tiff":
-	sorted_frames = normVideo(sorted_frames)
+	#sorted_frames = normVideo(sorted_frames)
+	norm_frames = normVideo(sorted_frames)
+#jpegs already normalised
+else:
+	norm_frames = sorted_frames.copy()
 
 #Write video
-vid_frames = [i for i in sorted_frames if i is not None]
+vid_frames = [frame for frame in norm_frames if frame is not None]
 fourcc = cv2.VideoWriter_fourcc(*'MJPG')
 height, width, layers = vid_frames[0].shape
 size = (width,height)
@@ -534,34 +524,27 @@ out.release()
 
 embryo = []
 #Find first frame that exists
-start_frame = next(x for x, frame in enumerate(sorted_frames) if frame is not None)
-frame0 = sorted_frames[start_frame]
+#start_frame = next(x for x, frame in enumerate(sorted_frames) if frame is not None)
+#frame0 = sorted_frames[start_frame]
+start_frame = next(x for x, frame in enumerate(norm_frames) if frame is not None)
+frame0 = norm_frames[start_frame]
 embryo.append(frame0)
+
+#Generate blank images for masking
+rows, cols, _ = frame0.shape
+eye_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
+heart_roi = np.zeros(shape=[rows, cols], dtype=np.uint8)
+heart_roi2 = np.zeros(shape=[rows, cols], dtype=np.uint8)
 
 #Process frame0
 old_cl, old_grey, old_blur = processFrame(frame0)
 
 #Detect eyes in all frames
-eye_masks = [detectEyes(frame) for frame in sorted_frames if frame is not None]
+eye_masks = [detectEyes(frame) for frame in norm_frames if frame is not None]
+
 #Combine all individual eye masks  
-#eye_mask = cv2.add(eye_masks[0],eye_masks[1])
-eye_mask = eye_masks[0] + eye_masks[1]
-
-# split source frame into B,G,R channels
-b,g,r = cv2.split(frame0)
-
-# add a constant to r (red) channel to highlight the outline of the heart
-r = cv2.add(r, 100, dst = r, mask = eye_mask, dtype = cv2.CV_8U)
-#masked_frame = cv2.merge((b, g, r))
-eyes_masked = cv2.merge((r, g, b))
-
-
-#[detectEyes(frame) for frame in sorted_frames if frame is not None] 
-#heart_roi = cv2.add(heart_roi, triangle_thresh)
-
-rows, cols, _ = frame0.shape
-heart_roi = np.zeros(shape=[rows, cols], dtype=np.uint8)
-heart_roi2 = np.zeros(shape=[rows, cols], dtype=np.uint8)
+for img in eye_masks:
+	eye_mask = cv2.add(eye_mask, img)
 
 #Numpy matrix: 
 #Coord 1 = row(s)
@@ -570,9 +553,10 @@ heart_roi2 = np.zeros(shape=[rows, cols], dtype=np.uint8)
 #Detect heart region (and possibly blood vessels)
 #Frame j vs. j - 1
 j = start_frame + 1
-while j < len(sorted_frames):
+while j < len(norm_frames):
 
-	frame = sorted_frames[j]
+#	frame = sorted_frames[j]
+	frame = norm_frames[j]
 
 	#Check if jth frame exists
 	if frame is not None:
@@ -609,8 +593,8 @@ while j < len(sorted_frames):
 
 
 #Get indices of top 500 most changeable pixels
-#changeable_pixels = np.unravel_index(np.argsort(heart_roi.ravel())[-250:], heart_roi.shape)
-changeable_pixels = np.unravel_index(np.argsort(heart_roi.ravel())[-500:], heart_roi.shape)
+changeable_pixels = np.unravel_index(np.argsort(heart_roi.ravel())[-250:], heart_roi.shape)
+#changeable_pixels = np.unravel_index(np.argsort(heart_roi.ravel())[-500:], heart_roi.shape)
 
 #Create boolean matrix the same size as the RoI image
 maxima = np.zeros((heart_roi.shape), dtype=bool)
@@ -694,7 +678,7 @@ out_fig = out_dir + "/embryo_heart_roi.png"
 
 fig, ax = plt.subplots(2, 2,figsize=(15, 15))
 #First  frame
-ax[0, 0].imshow(sorted_frames[0])
+ax[0, 0].imshow(norm_frames[start_frame])
 ax[0, 0].set_title('Embryo',fontsize=10)
 ax[0, 0].axis('off')
 #Summed Absolute Difference
@@ -755,8 +739,12 @@ for i in range(len(embryo)):
 		# split source frame into B,G,R channels
 		b,g,r = cv2.split(frame)
 
-		# add a constant to B (blue) channel to highlight the outline of the heart
+		# add a constant to B (blue) channel to highlight the heart
 		b = cv2.add(b, 100, dst = b, mask = mask, dtype = cv2.CV_8U)
+
+		# add a constant to R (red) channel to highlight the eyes
+		r = cv2.add(r, 100, dst = r, mask = eye_mask, dtype = cv2.CV_8U)
+
 		masked_frame = cv2.merge((b, g, r))
 
 		#Crop based on bounding rectangle
@@ -806,6 +794,11 @@ for i in range(len(embryo)):
 	times.append(time_elapsed)
 
 #times = np.arange(x.size) / fps
+
+# add a constant to r (red) channel to highlight the outline of the heart
+#r = cv2.add(r, 100, dst = r, mask = eye_mask, dtype = cv2.CV_8U)
+#masked_frame = cv2.merge((b, g, r))
+#eyes_masked = cv2.merge((r, g, b))
 
 #cv2.rectangle(heart_roi_clean,(x1,y1),(x1 + w1,y1 + h1),255,2)
 
@@ -943,7 +936,9 @@ if len(peaks[prominent_peaks]) > 4:
 #Heart rate interpolation from Declan O'Regan lab
 
 #Filter out any np.nan from y
-#if y
+#x[start_frame]
+
+#if x
 #	y_filtered = 
 #	times_filtered =
 #else:
