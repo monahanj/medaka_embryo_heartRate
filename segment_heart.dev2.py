@@ -592,7 +592,7 @@ while j < len(norm_frames):
 #heart_roi2 = 255 - heart_roi2
 
 
-#Get indices of top 500 most changeable pixels
+#Get indices of N most changeable pixels
 changeable_pixels = np.unravel_index(np.argsort(heart_roi.ravel())[-250:], heart_roi.shape)
 #changeable_pixels = np.unravel_index(np.argsort(heart_roi.ravel())[-500:], heart_roi.shape)
 
@@ -604,7 +604,9 @@ maxima[changeable_pixels] = True
 label_maxima = label(maxima)
 
 #Threshold heart RoI to generate mask
-heart_roi_clean = cv2.threshold(heart_roi,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+yen = threshold_yen(heart_roi)
+heart_roi_clean = heart_roi > yen
+heart_roi_clean = heart_roi_clean.astype(np.uint8)
 
 #Fill in empty regions (if any) in heart mask
 #heart_roi_clean = img_as_ubyte(ndi.binary_fill_holes(heart_roi_clean))
@@ -636,7 +638,8 @@ for i in range(len(contours)):
 	area_of_intersection = intersection.sum()
 
 	#Calculate ratio between area of intersection and contour area 
-	ratio = area_of_intersection / contour_mask.sum()	
+	#ratio = area_of_intersection / contour_mask.sum()	
+	ratio = area_of_intersection 
 
 	if i == 0:
 		mask = contour_mask
@@ -795,11 +798,6 @@ for i in range(len(embryo)):
 
 #times = np.arange(x.size) / fps
 
-# add a constant to r (red) channel to highlight the outline of the heart
-#r = cv2.add(r, 100, dst = r, mask = eye_mask, dtype = cv2.CV_8U)
-#masked_frame = cv2.merge((b, g, r))
-#eyes_masked = cv2.merge((r, g, b))
-
 #cv2.rectangle(heart_roi_clean,(x1,y1),(x1 + w1,y1 + h1),255,2)
 
 out_vid = out_dir + "/embryo_changes.avi"
@@ -839,11 +837,11 @@ with open(out_signal, 'w') as output:
 
 #Find peaks in heart ROI signal, peaks only those above the mean stdev
 #Minimum distance of 2 between peaks
-peaks, _ = find_peaks(y)
-#peaks2, _ = find_peaks(y,prominence = 0.2)
+#peaks, _ = find_peaks(y)
+peaks, _ = find_peaks(y, prominence = 0.2)
 
 #Peak prominence
-prominences = peak_prominences(y,peaks)
+prominences = peak_prominences(y, peaks)
 
 out_fig = out_dir + "/bpm_prominences.png"
 contour_heights = y[peaks] - prominences
