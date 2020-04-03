@@ -13,7 +13,7 @@ import cv2
 import skimage
 from skimage.util import compare_images, img_as_ubyte, img_as_float
 from skimage.filters import threshold_triangle, threshold_otsu, threshold_yen, roberts, sobel, scharr
-from skimage.measure import label
+from skimage.measure import label#, find_contours 
 from skimage.feature import peak_local_max, canny
 from skimage import color
 
@@ -23,7 +23,7 @@ from scipy.signal import find_peaks, peak_prominences#, find_peaks_cwt
 from scipy.interpolate import CubicSpline
 
 import matplotlib
-matplotlib.use('Agg')
+#matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 
 from collections import Counter
@@ -127,10 +127,31 @@ def detectEyes(frame):
 	frame_grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 	eye_mask = cv2.inRange(frame_grey, 0, 50)
 
-#	#Opening
-#	eye_mask = cv2.morphologyEx(eye_mask, cv2.MORPH_OPEN, kernel)  
+	#Opening
+	eye_mask = cv2.morphologyEx(eye_mask, cv2.MORPH_OPEN, kernel)  
 
 	return(eye_mask)
+
+#Detect oil droplet(s) in embryo sac
+def detectDroplet(frame):
+
+	frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+#	plt.imshow(img,'gray')
+#	plt.show()
+
+
+	frame = img_as_float(frame)
+	#edges = canny(frame, sigma=3)
+	edges = sobel(frame)
+
+	
+
+#	plt.imshow(markers)
+#	plt.axis('off')
+#	plt.show()
+
+	return(frame)
 
 #Pre-process frame
 def processFrame(frame):
@@ -542,6 +563,8 @@ old_cl, old_grey, old_blur = processFrame(frame0)
 #Detect eyes in all frames
 eye_masks = [detectEyes(frame) for frame in norm_frames if frame is not None]
 
+#droplet_masks = detectDroplet(frame0)
+
 #Combine all individual eye masks  
 for img in eye_masks:
 	eye_mask = cv2.add(eye_mask, img)
@@ -837,8 +860,8 @@ with open(out_signal, 'w') as output:
 
 #Find peaks in heart ROI signal, peaks only those above the mean stdev
 #Minimum distance of 2 between peaks
+peaks, _ = find_peaks(y, height = meanY)
 #peaks, _ = find_peaks(y)
-peaks, _ = find_peaks(y, prominence = 0.2)
 
 #Peak prominence
 prominences = peak_prominences(y, peaks)
@@ -849,10 +872,12 @@ plt.plot(y)
 plt.plot(peaks, y[peaks], "x")
 plt.ylabel('Heart ROI intensity (CoV)')
 plt.vlines(x=peaks, ymin=contour_heights, ymax=y[peaks])
+plt.hlines(y = meanY, xmin = 0, xmax = len(y), linestyles = "dashed")
 plt.savefig(out_fig,bbox_inches='tight')
 plt.close()
 
-#prominent_peaks = [idx for idx, prominence in enumerate(prominences[0])] if prominence > 0.2] 
+#print(prominences)
+#prominent_peaks = [idx for idx, prominence in enumerate(prominences[0]) if prominence > 0.2] 
 prominent_peaks = [idx for idx, prominence in enumerate(prominences[0])]
 
 #Only calculate if more than 4 beats are detected
@@ -893,7 +918,7 @@ if len(peaks[prominent_peaks]) > 4:
 
 	#Label trace with bpm
 	plt.title(bpm_label)
-#	plt.hlines(y = meanY, xmin = times[0], xmax = times[-1], linestyles = "dashed")
+	plt.hlines(y = meanY, xmin = times[0], xmax = times[-1], linestyles = "dashed")
 	plt.savefig(out_fig)
 	plt.close()
 
