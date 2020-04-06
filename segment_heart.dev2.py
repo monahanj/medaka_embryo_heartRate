@@ -958,18 +958,60 @@ if len(peaks[prominent_peaks]) > 4:
 #TODO
 #Heart rate interpolation from Declan O'Regan lab
 
-#Filter out any np.nan from y
-#x[start_frame]
+#Get indices of na values
+na_values = np.isnan(y)
+empty_frames = [i for i, x in enumerate(na_values) if x]
 
-#if x
-#	y_filtered = 
-#	times_filtered =
-#else:
-#	y_filtered = y
-#	times_filtered = times
+#If no empty frames
+if len(empty_frames) == 0:
 
-#cs = CubicSpline(times_filtered, y_filtered)
-#xs = np.arange(times_filtered) / fps 
+	#Remove first and last frames
+	#sig_range = range(1,len(y)-1)
+	sig_range = range(5,len(y)-5)
+#	sig_range = range(0,len(y))
+	#print(len(sig_range))
+	#print(sig_range[-1])
+
+	frame2frame = 1 / fps 
+	cs = CubicSpline(times[sig_range], y[sig_range])
+	xs = np.arange(times[sig_range[0]], times[sig_range[-1]],frame2frame)
+	#xs = np.arange(len(times[sig_range])) / fps 
+
+	y_interploated = cs[xs]
+	#y_interploated = cs[times[sig_range]]
+#	peaks2, _ = find_peaks(y_interploated)#, height = np.mean(y_interploated))
+
+	plt.plot(xs, cs(xs), label="Interpolated")
+	plt.plot(times[sig_range], y[sig_range], 'o', label='data')
+	plt.show()
+	
+
+#If only one empty frame
+elif len(empty_frames) == 1:
+
+	#Split signal in two to exclude the empty frame 
+	y1 = y[:empty_frames[0]]
+	#times1 = times[[:empty_frames[0]]
+
+	y2 = y[empty_frames[0] + 1 :]
+	#times2 = times[[:empty_frames[0]]
+
+	#merged = y1 + y2
+	#times_filtered = times1 + times2
+	#Perform interploation on each individually
+
+	#cs = CubicSpline(times_filtered, y_filtered)
+	#xs = np.arange(times_filtered) / fps 
+
+	#Fast fourier transform
+
+	#Compare the 2  transformed, split signals
+
+
+#Exclude well if more than one empty frame
+else:
+
+	print("Too many empty frames")
 
 
 #data= readtable('medaka_heart.signal_stdev.txt');
