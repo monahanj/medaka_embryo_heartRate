@@ -19,11 +19,11 @@ from skimage import color
 
 import scipy
 from scipy import ndimage as ndi
-from scipy.signal import find_peaks, peak_prominences#, find_peaks_cwt
+from scipy.signal import find_peaks, peak_prominences, welch
 from scipy.interpolate import CubicSpline
 
 import matplotlib
-#matplotlib.use('Agg')
+matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 
 from collections import Counter
@@ -511,8 +511,8 @@ for index,row in imgs_meta.iterrows():
 	else:
                 sorted_frames.append(None)
 
-#Only process if less than 5 frames are empty
-if sum(frame is not None for frame in sorted_frames) < 5:
+#Only process if less than 5% frames are empty
+if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 	#Determine frame rate from time-stamps if unspecified 
 	if args.fps:
@@ -779,7 +779,6 @@ if sum(frame is not None for frame in sorted_frames) < 5:
 		heart_changes.append(cropped_mask)
 
 		frame_num = i + 1
-#		sums[frame_num] = heart_total
 #		stds[frame_num] = heart_std
 		cvs[frame_num] = heart_cv
 
@@ -806,13 +805,9 @@ if sum(frame is not None for frame in sorted_frames) < 5:
 
 		times.append(time_elapsed)
 
-	#times = np.arange(x.size) / fps
-
-	#cv2.rectangle(heart_roi_clean,(x1,y1),(x1 + w1,y1 + h1),255,2)
-
+	#Write video
 	out_vid = out_dir + "/embryo_changes.avi"
 	vid_frames = [i for i in embryo if i is not None]
-	#height, width, layers = embryo[0].shape
 	height, width, layers = vid_frames[0].shape
 	size = (width,height)
 	out2 = cv2.VideoWriter(out_vid,fourcc, fps, size)
@@ -838,12 +833,18 @@ if sum(frame is not None for frame in sorted_frames) < 5:
 
 	frame2frame = 1 / fps
 
-	#No interpolation necessary if no empty frames
-	elif len(empty_frames) == 0:
+	#Time domain
+	increment = np.mean(np.diff(times)) / 6
+	td = np.arange(times[0], times[-1] + increment, increment)
+
+	#No filtering needed for interpolation if no empty frames
+	if len(empty_frames) == 0:
 		y_final = y.copy()
 		cs = CubicSpline(times, y)
+
+	#Filter out missing signal values before interpolation
 	else:
-		#Remove NaN values from signal and time domain
+		#Remove NaN values from signal and time domain for interpolation
 		y_filtered = y.copy()
 		y_filtered = np.delete(y_filtered, empty_frames)
 		times_filtered = times.copy()
@@ -852,26 +853,15 @@ if sum(frame is not None for frame in sorted_frames) < 5:
 		#Perform cubic spline interpolation to calculate in missing values
 		cs = CubicSpline(times_filtered, y_filtered)
 
-		#plt.plot(times_filtered, cs(times_filtered), label="Interpolated Function")
-		#plt.plot(times, y,'x', label="Real Values")
-		#plt.plot(times[empty_frames], cs(times[empty_frames]), 'o', label='Interpolated missing value(s)')
-		#plt.show()
-
 		#Replace NaNs with interpolated values
 		y_final = y.copy()
-		
-		print(empty_frames)
-#       interpolated_value = cs(times[empty_frames[0]]
-#		y_final = cs(times[empty_frames[0]] 
+		y_final[empty_frames] = cs(times[empty_frames])
 
 	meanY = np.mean(y_final)
 	#xnorm = y_final - meanY
 
-        #Fast fourier transform
-
-
 	#Write Signal to file
-	out_signal = out_dir + "/medaka_heart.signal_stdev.txt"
+	out_signal = out_dir + "/medaka_heart.signal_CoV.txt"
 	with open(out_signal, 'w') as output:
 
 		output.write("Time" + "\t" + "Signal (CoV)" + "\n")
@@ -884,7 +874,7 @@ if sum(frame is not None for frame in sorted_frames) < 5:
 	#Find peaks in heart ROI signal, peaks only those above the mean stdev
 	#Minimum distance of 2 between peaks
 	peaks, _ = find_peaks(y_final, height = meanY)
-	#peaks, _ = find_peaks(y)
+#	peaks, _ = find_peaks(y_final)
 
 	#Peak prominence
 	prominences = peak_prominences(y_final, peaks)
@@ -899,7 +889,6 @@ if sum(frame is not None for frame in sorted_frames) < 5:
 	plt.savefig(out_fig,bbox_inches='tight')
 	plt.close()
 
-#	print(prominences)
 #	prominent_peaks = [idx for idx, prominence in enumerate(prominences[0]) if prominence > 0.2] 
 	prominent_peaks = [idx for idx, prominence in enumerate(prominences[0])]
 
@@ -917,22 +906,12 @@ if sum(frame is not None for frame in sorted_frames) < 5:
 		bpm = bps * 60
 		bpm = np.around(bpm) #, decimals=1)
 
-		out_fig = out_dir + "/bpm_trace.png"
+		out_fig2 = out_dir + "/bpm_trace.peaks.png"
 
 		if bpm < 300 and bpm > 60:
 			bpm_label = "BPM = " +  str(int(bpm))
 		else:
 			bpm_label = "BPM = " +  str(int(bpm)) + " (uneliable)"
-
-		#Signal QC  
-
-		out_file = out_dir + "/heart_rate.txt"
-		#Write bpm to file
-		with open(out_file, 'w') as output:
-	
-			output.write("well\twell_id\tbpm\n")
-
-			output.write(well_number + "\t" + well + "\t" +  str(int(bpm)))
 
 		plt.plot(times, y)
 		plt.plot(peak_times, peak_signal, "x")
@@ -942,7 +921,7 @@ if sum(frame is not None for frame in sorted_frames) < 5:
 		#Label trace with bpm
 		plt.title(bpm_label)
 		plt.hlines(y = meanY, xmin = times[0], xmax = times[-1], linestyles = "dashed")
-		plt.savefig(out_fig)
+		plt.savefig(out_fig2)
 		plt.close()
 
 		#Root mean square of successive differences
@@ -975,16 +954,79 @@ if sum(frame is not None for frame in sorted_frames) < 5:
 #       	 else
 #	            % 'acceptable';
 #       	         arrhythmia(b-3) = 0;
-	#TODO 
-	#Fast fourier transform of cubic spline interpolation
-	Fs = 1 / fps
 
-#Exclude well if more than one empty frame
+		#Fast fourier transform of cubic spline interpolation
+		Fs = round(1/ np.mean(np.diff(td)))
+		window = np.hanning(3*Fs)
+		f, p_density = welch(x = cs(td), window = window, fs = Fs, nfft = np.power(2,14), return_onesided=True, detrend=False)
+		p_final = 10*np.log10(p_density)
+
+		#Calculate ylims for xrange 2 to 6
+		heart_freq = np.where(np.logical_and(f>=2, f<=6))
+		heart_range = p_final[heart_freq]
+
+		#Determine the peak within the range
+		heart_peak = np.argmax(p_final[heart_freq])
+
+		p_min = np.amin(heart_range)
+		p_max = heart_range[heart_peak]
+		ylims = (p_min -1, p_max +1) 
+
+		freq_peaks, _ = find_peaks(p_density)
+	
+		bpm_welch = f[heart_freq][heart_peak] * 60
+		if bpm_welch < 300 and bpm_welch > 60:
+			bpm_label2 = "BPM = " +  str(int(bpm_welch))
+		else:
+			bpm_label2 = "BPM = " +  str(int(bpm_welch)) + " (unreliable)"	
+
+		out_fig3 = out_dir + "/bpm_power_spectra.welch.png"
+
+		fig, [ax1,ax2] = plt.subplots(nrows=1, ncols=2, figsize=(10, 10))
+		#Plot all power spectra
+		ax1.semilogx(f, p_final)
+		ax1.set_xlabel('Frequency (Hz)')
+		ax1.set_ylabel('Power Spectrum (dB/Hz)')
+
+		ax2.plot(f, p_final)
+		ax2.set_xlabel('Frequency (Hz)')
+		ax2.set_ylabel('Power Spectrum (dB/Hz)')
+		ax2.plot(f[heart_freq][heart_peak], p_final[heart_freq][heart_peak], "x") #Peak
+		ax2.set_xlim((2, 6))
+		ax2.set_ylim(ylims)        
+		ax2.vlines(x=f[heart_freq][heart_peak], ymin=ylims[0], ymax=p_final[heart_freq][heart_peak], linestyles = "dashed")
+		ax2.hlines(y=p_final[heart_freq][heart_peak], xmin=2, xmax=f[heart_freq][heart_peak], linestyles = "dashed")
+
+		ax2.title.set_text(bpm_label2)
+		plt.savefig(out_fig3)
+		plt.close()
+
+		bpm = np.around(bpm, decimals=2)
+		bpm_welch = np.around(bpm_welch, decimals=2)
+		#Write bpm estimates to file
+		out_file = out_dir + "/heart_rate.txt"
+		with open(out_file, 'w') as output:
+	
+			output.write("well\twell_id\tbpm\tbpm_spectra\n")
+
+			#output.write(well_number + "\t" + well + "\t" +  str(int(bpm)) + str(int(bpm_welch)) + "\n")
+			output.write(well_number + "\t" + well + "\t" +  str(bpm) + "\t" + str(bpm_welch) + "\n")
+	
+	else:
+		out_file = out_dir + "/heart_rate.txt"
+		#Write bpm to file
+		with open(out_file, 'w') as output:
+
+			output.write("well\twell_id\tbpm\tbpm_spectra\n")
+			output.write(well_number + "\t" + well + "\tNA\tNA")
+
 else:
+	out_file = out_dir + "/heart_rate.txt"
+	#Write bpm to file
+	with open(out_file, 'w') as output:
 
-	print("Too many empty frames")
-
-
+		output.write("well\twell_id\tbpm\tbpm_spectra\n")
+		output.write(well_number + "\t" + well + "\tNA\tNA")
 
 #figure;
 #Fs=round(1/mean(diff(td)));
@@ -994,81 +1036,15 @@ else:
 #title(sprintf('HRV after interpolation'))
 
 #[Psig,Fsig] = pwelch(data_interp, hanning(3*Fs), [], pow2(14), Fs,'onesided');
+#pow2 = base power 2
+#scipy np.power(x1, 2)
+
 #figure;semilogx(Fsig,10*log10(Psig),'Color',[0, 0.4470, 0.7410],'LineWidth',2);
 #xlabel('Frequency (Hz)','FontSize',12,'FontWeight','bold');ylabel('Power Spectrum (dB/Hz)','FontSize',12,'FontWeight','bold');
 #grid
 #title('Power spectral density of HRV')
 #xlim([2 6]);
 
-
-#	from scipy import signal
-
-#	j = 0
-	#Time between peaks
-#	while j < len(peaks):
-
-#		time1 = "foo" 
-#		time2 = "bar"
-#		j += 1
-#	print(len(x))
-#	print(fps)
-#	freqs, times, Sxx = signal.spectrogram(x, fs=fps,nperseg = 20)
-	#freqs, times, Sx = signal.spectrogram(x, fs=fps, window='hanning', nperseg=1024, noverlap=M - 100, detrend=False, scaling='spectrum')
-
-#	print(times)
-#	plt.pcolormesh(times, freqs, Sxx)
-#	plt.ylabel('Frequency [Hz]')
-#	plt.xlabel('Time [sec]')
-#	plt.show()
-
-#	f, ax = plt.subplots(figsize=(4.8, 2.4))
-#	ax.pcolormesh(times, freqs / 1000, 10 * np.log10(Sx), cmap='viridis')
-#	ax.set_ylabel('Frequency [kHz]')
-#	ax.set_xlabel('Time [s]');
-
-
-
-#	Fs = fps
-#	N = len(x)
-
-#	L = N / rate
-
-#	Ts = 1.0/Fs # sampling interval
-#	n = len(x) # length of the signal
-#	k = np.arange(n)
-#	print(Ts)
-#	t = np.arange(0,1,Ts) # time vector
-#	print(t)
-#	t2 = no.arange(times) / 10 # time vector
-#	print(t2)
-
-#	t3 = np.arange(0,n) * Ts
-#	print(t3)
-
-#	T = n/Fs
-#	frq = k/T # two sides frequency range
-#	frq = frq[range(int(n/2))] # one side frequency range
-#	X = fft(x)/n # fft computing and normalization
-#	X = X[range(int(n/2))]
-
-#	plot(frq,abs(X),'r') # plotting the spectrum
-#	xlabel('Freq (Hz)')
-#	ylabel('|Y(freq)|')
-#	plt.show()
-
-	#ff = 5; # frequency of the signal
-	#y = sin(2*pi*ff*t)
-	#y = sin(2*pi*ff*t)
-	#subplot(2,1,1)
-#plot(t,y)
-#xlabel('Time')
-#ylabel('Amplitude')
-#subplot(2,1,2)
-
-#Fourier transform 
-
-
-# Signal Processing
 #Welch’s method [R145] computes an estimate of the power spectral density by dividing the data into overlapping segments, computing a modified periodogram for each segment and averaging the periodograms.
 #https://docs.scipy.org/doc/scipy-0.14.0/reference/generated/scipy.signal.welch.html
 
