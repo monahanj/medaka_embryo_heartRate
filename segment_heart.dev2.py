@@ -41,9 +41,11 @@ parser.add_argument('-i','--indir', action="store", dest='indir', help='Director
 parser.add_argument('-t','--format', action="store", dest='frame_format', help='Frame format', default='tiff', required = False)
 parser.add_argument('-w','--well', action="store", dest='well', help='Well Id', default=False, required = True)
 parser.add_argument('-l','--loop', action="store", dest='loop', help='Well frame acquistion loop', default=None, required = False)
-parser.add_argument('-c','--crop', action="store", dest='crop', type=bool, help='Crop frame images?', default=True, required = False)
+parser.add_argument('--crop', dest='crop', action='store_true')
+parser.add_argument('--no-crop', dest='crop', action='store_false')
 parser.add_argument('-f','--fps', action="store", dest='fps', help='Frames per second', default=False, required = False)
 parser.add_argument('-o','--out', action="store", dest='out', help='Output', default=False, required = True)
+parser.set_defaults(feature=True)
 args = parser.parse_args()
 
 indir = args.indir
@@ -653,8 +655,8 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		area_of_intersection = intersection.sum()
 
 		#Calculate ratio between area of intersection and contour area 
-		ratio = area_of_intersection / contour_mask.sum()	
-		#ratio = area_of_intersection 
+		#ratio = area_of_intersection / contour_mask.sum()	
+		ratio = area_of_intersection 
 
 		if i == 0:
 			mask = contour_mask
@@ -945,16 +947,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		#for R–R interval time series 
 
 
-#		RmssdThresh = 
-#       	 % arrhythmia array (with 1)
-#	        if RMSSD(b-3) > RmssdThresh
-#       	      % 'unacceptable'
-#	              arrhythmia(b-3) = 1;
-
-#       	 else
-#	            % 'acceptable';
-#       	         arrhythmia(b-3) = 0;
-
 		#Fast fourier transform of cubic spline interpolation
 		Fs = round(1/ np.mean(np.diff(td)))
 		window = np.hanning(3*Fs)
@@ -982,7 +974,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 		out_fig3 = out_dir + "/bpm_power_spectra.welch.png"
 
-		fig, [ax1,ax2] = plt.subplots(nrows=1, ncols=2, figsize=(10, 10))
+		fig, [ax1,ax2] = plt.subplots(nrows=2, ncols=1, figsize=(10, 10))
 		#Plot all power spectra
 		ax1.semilogx(f, p_final)
 		ax1.set_xlabel('Frequency (Hz)')
@@ -1018,7 +1010,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		with open(out_file, 'w') as output:
 
 			output.write("well\twell_id\tbpm\tbpm_spectra\n")
-			output.write(well_number + "\t" + well + "\tNA\tNA")
+			output.write(well_number + "\t" + well + "\tNA\tNA\n")
 
 else:
 	out_file = out_dir + "/heart_rate.txt"
@@ -1026,7 +1018,7 @@ else:
 	with open(out_file, 'w') as output:
 
 		output.write("well\twell_id\tbpm\tbpm_spectra\n")
-		output.write(well_number + "\t" + well + "\tNA\tNA")
+		output.write(well_number + "\t" + well + "\tNA\tNA\n")
 
 #figure;
 #Fs=round(1/mean(diff(td)));
