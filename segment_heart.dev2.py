@@ -106,7 +106,7 @@ def normVideo(frames):
 				filtered_frames = np.dstack((filtered_frames, frame))
 
 	norm_frames = [] 
-	#Divide by max to try and remove flickering between frames
+	##Divide by max to try and remove flickering between frames
 	for i in range(len(frames)):
 
 		frame = frames[i]
@@ -213,7 +213,6 @@ def diffFrame(frame2, frame1):
 
 	#Absolute differnce between frames
 	abs_diff = cv2.absdiff(frame2,frame1)
-	#abs_diff = cv2.morphologyEx(abs_diff, cv2.MORPH_OPEN, kernel) 
 
 	#Triangle thresholding on differences
 	triangle = threshold_triangle(abs_diff)
@@ -226,7 +225,7 @@ def diffFrame(frame2, frame1):
         #Find contours based on thresholded frame
 	contours, hierarchy = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 
-	#Filter contours based on their area
+#	#Filter contours based on their area
 	filtered_contours = []
 	for i in range(len(contours)):
 		contour = contours[i]
@@ -235,19 +234,20 @@ def diffFrame(frame2, frame1):
 		if cv2.contourArea(contour) >= min_area:
 			filtered_contours.append(contour)
 
+	contours = filtered_contours 
+
 	#Create blank mask
 	rows, cols = thresh.shape
 	mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
 
 	#Draw and fill-in filtered contours on blank mask
-	cv2.drawContours(mask, filtered_contours,-1, 255, thickness = -1)
+	cv2.drawContours(mask, contours, -1, 255, thickness = -1)
 	
 	#Mask frame
 	masked_frame = maskFrame(frame,mask)
 
 	#Return the masked frame, the filtered mask and the absolute differences for the 2 frames
-	#return masked_frame, mask, abs_diff, thresh, yen_thresh
-#	return masked_frame, mask, thresh, yen_thresh
+	#return masked_frame, mask, abs_diff, thresh
 	return masked_frame, mask, thresh
 
 #Calculate RMSSD
@@ -438,8 +438,6 @@ img_out = img.copy()
 #Crop if a tiff
 if crop is True:
 
-	#Threshold based on size of cropped image (will add if necessary eventually)
-	print("Cropping frames\n")
 	#Uniformly crop image per loop per well based on the circle radii + offset
 	well_crop_params = {}
 	for well_id in sizes.keys():
@@ -455,11 +453,8 @@ if crop is True:
 	# Draw the circle
 	cv2.circle(img_out,(circle[0],circle[1]),circle[2],(0,255,0),2)
 
-out_fig = out_dir + "/embryo.uncropped.png"
-plt.imshow(img_out)
-plt.axis('off')
-plt.savefig(out_fig)
-plt.close()
+out_fig = out_dir + "/embryo.original.png"
+cv2.imwrite(out_fig,img_out)
 
 # creating a dataframe from a dictionary 
 imgs_meta = pd.DataFrame(imgs_meta)
@@ -558,7 +553,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 	#Generate blank images for masking
 	rows, cols, _ = frame0.shape
-	eye_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
+#	eye_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
 	heart_roi = np.zeros(shape=[rows, cols], dtype=np.uint8)
 	heart_roi2 = np.zeros(shape=[rows, cols], dtype=np.uint8)
 
@@ -566,13 +561,13 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	old_cl, old_grey, old_blur = processFrame(frame0)
 
 	#Detect eyes in all frames
-	eye_masks = [detectEyes(frame) for frame in norm_frames if frame is not None]
+#	eye_masks = [detectEyes(frame) for frame in norm_frames if frame is not None]
 
 	#droplet_masks = detectDroplet(frame0)
 
 	#Combine all individual eye masks  
-	for img in eye_masks:
-		eye_mask = cv2.add(eye_mask, img)
+#	for img in eye_masks:
+#		eye_mask = cv2.add(eye_mask, img)
 
 	#Numpy matrix: 
 	#Coord 1 = row(s)
@@ -626,7 +621,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	yen = threshold_yen(heart_roi)
 	heart_roi_clean = heart_roi > yen
 	heart_roi_clean = heart_roi_clean.astype(np.uint8)
-
 
 	#Scikit image to opencv
 	#cv_image = img_as_ubyte(any_skimage_image)
@@ -758,7 +752,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			b = cv2.add(b, 100, dst = b, mask = mask, dtype = cv2.CV_8U)
 
 			# add a constant to R (red) channel to highlight the eyes
-			r = cv2.add(r, 100, dst = r, mask = eye_mask, dtype = cv2.CV_8U)
+			#r = cv2.add(r, 100, dst = r, mask = eye_mask, dtype = cv2.CV_8U)
 
 			masked_frame = cv2.merge((b, g, r))
 
@@ -822,8 +816,8 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	############################
 	# Min and max bpm from Jakob paper
 	#Only consider bpms (i.e. frequencies) less than 300 and greater than 60
-	minBPM = 60
-	maxBPM = 300
+	minBPM = 60 # 1 hz
+	maxBPM = 300 # 5 hz
 
 	times = np.asarray(times, dtype=float)
 	#y = np.asarray(list(stds.values()), dtype=float)
@@ -876,7 +870,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	#Find peaks in heart ROI signal, peaks only those above the mean stdev
 	#Minimum distance of 2 between peaks
 	peaks, _ = find_peaks(y_final, height = meanY)
-#	peaks, _ = find_peaks(y_final)
 
 	#Peak prominence
 	prominences = peak_prominences(y_final, peaks)
@@ -947,14 +940,13 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		#for R–R interval time series 
 
 
-		#Fast fourier transform of cubic spline interpolation
-		Fs = round(1/ np.mean(np.diff(td)))
+		#Welch's Method for spectral analysis
 		window = np.hanning(3*Fs)
 		f, p_density = welch(x = cs(td), window = window, fs = Fs, nfft = np.power(2,14), return_onesided=True, detrend=False)
 		p_final = 10*np.log10(p_density)
 
-		#Calculate ylims for xrange 2 to 6
-		heart_freq = np.where(np.logical_and(f>=2, f<=6))
+		#Calculate ylims for xrange 1 to 6
+		heart_freq = np.where(np.logical_and(f>=1, f<=6))
 		heart_range = p_final[heart_freq]
 
 		#Determine the peak within the range
@@ -965,8 +957,10 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		ylims = (p_min -1, p_max +1) 
 
 		freq_peaks, _ = find_peaks(p_density)
-	
+
+		#calculate beats per min from frequency spectra	
 		bpm_welch = f[heart_freq][heart_peak] * 60
+
 		if bpm_welch < 300 and bpm_welch > 60:
 			bpm_label2 = "BPM = " +  str(int(bpm_welch))
 		else:
@@ -984,12 +978,13 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		ax2.set_xlabel('Frequency (Hz)')
 		ax2.set_ylabel('Power Spectrum (dB/Hz)')
 		ax2.plot(f[heart_freq][heart_peak], p_final[heart_freq][heart_peak], "x") #Peak
-		ax2.set_xlim((2, 6))
+		ax2.set_xlim((0.75, 6))
 		ax2.set_ylim(ylims)        
 		ax2.vlines(x=f[heart_freq][heart_peak], ymin=ylims[0], ymax=p_final[heart_freq][heart_peak], linestyles = "dashed")
-		ax2.hlines(y=p_final[heart_freq][heart_peak], xmin=2, xmax=f[heart_freq][heart_peak], linestyles = "dashed")
+		ax2.hlines(y=p_final[heart_freq][heart_peak], xmin=0.75, xmax=f[heart_freq][heart_peak], linestyles = "dashed")
 
-		ax2.title.set_text(bpm_label2)
+		ax2.set_title(bpm_label2, loc='right')
+		fig.suptitle("Power spectral density of HRV")
 		plt.savefig(out_fig3)
 		plt.close()
 
@@ -1000,8 +995,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		with open(out_file, 'w') as output:
 	
 			output.write("well\twell_id\tbpm\tbpm_spectra\n")
-
-			#output.write(well_number + "\t" + well + "\t" +  str(int(bpm)) + str(int(bpm_welch)) + "\n")
 			output.write(well_number + "\t" + well + "\t" +  str(bpm) + "\t" + str(bpm_welch) + "\n")
 	
 	else:
@@ -1020,29 +1013,11 @@ else:
 		output.write("well\twell_id\tbpm\tbpm_spectra\n")
 		output.write(well_number + "\t" + well + "\tNA\tNA\n")
 
-#figure;
-#Fs=round(1/mean(diff(td)));
-#plot(td,data_interp);hold on;
-#plot(td(min_locs),data_interp(min_locs),'rv','MarkerFaceColor','r','LineWidth',2)
-#grid;ylim([7 8.2]);
-#title(sprintf('HRV after interpolation'))
-
-#[Psig,Fsig] = pwelch(data_interp, hanning(3*Fs), [], pow2(14), Fs,'onesided');
-#pow2 = base power 2
-#scipy np.power(x1, 2)
-
-#figure;semilogx(Fsig,10*log10(Psig),'Color',[0, 0.4470, 0.7410],'LineWidth',2);
-#xlabel('Frequency (Hz)','FontSize',12,'FontWeight','bold');ylabel('Power Spectrum (dB/Hz)','FontSize',12,'FontWeight','bold');
-#grid
-#title('Power spectral density of HRV')
-#xlim([2 6]);
-
 #Welch’s method [R145] computes an estimate of the power spectral density by dividing the data into overlapping segments, computing a modified periodogram for each segment and averaging the periodograms.
 #https://docs.scipy.org/doc/scipy-0.14.0/reference/generated/scipy.signal.welch.html
 
 
 #Issues 
 #Heart obscured and picks up blood vessels
-#Empty frames
 #Disconnected heart RoI sections
 #differences in illumination between frames (flickering)
