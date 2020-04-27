@@ -28,7 +28,8 @@ from matplotlib import pyplot as plt
 
 from collections import Counter
 
-import pywt
+import warnings
+warnings.filterwarnings("ignore", category=SyntaxWarning)
 
 np.set_printoptions(threshold=np.inf)
 
@@ -939,8 +940,8 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 		#for R–R interval time series 
 
-
 		#Welch's Method for spectral analysis
+		Fs = round(1/ np.mean(np.diff(td)))
 		window = np.hanning(3*Fs)
 		f, p_density = welch(x = cs(td), window = window, fs = Fs, nfft = np.power(2,14), return_onesided=True, detrend=False)
 		p_final = 10*np.log10(p_density)
@@ -971,20 +972,20 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		fig, [ax1,ax2] = plt.subplots(nrows=2, ncols=1, figsize=(10, 10))
 		#Plot all power spectra
 		ax1.semilogx(f, p_final)
-		ax1.set_xlabel('Frequency (Hz)')
 		ax1.set_ylabel('Power Spectrum (dB/Hz)')
 
 		ax2.plot(f, p_final)
-		ax2.set_xlabel('Frequency (Hz)')
-		ax2.set_ylabel('Power Spectrum (dB/Hz)')
 		ax2.plot(f[heart_freq][heart_peak], p_final[heart_freq][heart_peak], "x") #Peak
 		ax2.set_xlim((0.75, 6))
 		ax2.set_ylim(ylims)        
 		ax2.vlines(x=f[heart_freq][heart_peak], ymin=ylims[0], ymax=p_final[heart_freq][heart_peak], linestyles = "dashed")
 		ax2.hlines(y=p_final[heart_freq][heart_peak], xmin=0.75, xmax=f[heart_freq][heart_peak], linestyles = "dashed")
-
 		ax2.set_title(bpm_label2, loc='right')
+
 		fig.suptitle("Power spectral density of HRV")
+		plt.xlabel('Frequency (Hz)')
+		plt.ylabel('Power Spectrum (dB/Hz)')
+
 		plt.savefig(out_fig3)
 		plt.close()
 
