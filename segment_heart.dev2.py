@@ -535,10 +535,10 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 	#Write video
 	vid_frames = [frame for frame in norm_frames if frame is not None]
-	fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+	fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 	height, width, layers = vid_frames[0].shape
 	size = (width,height)
-	out_vid = out_dir + "/embryo.avi"
+	out_vid = out_dir + "/embryo.mp4"
 	out = cv2.VideoWriter(out_vid,fourcc, fps, size)
 	for i in range(len(vid_frames)):
 		out.write(vid_frames[i])
@@ -658,6 +658,9 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			overlap = area_of_intersection
 			contour = test_contour
 
+		#TODO
+		#Take all regions that overlap with the the N most changeable pixels
+	
 		elif ratio > overlap:
 			mask = contour_mask
 			overlap = area_of_intersection
@@ -803,7 +806,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		times.append(time_elapsed)
 
 	#Write video
-	out_vid = out_dir + "/embryo_changes.avi"
+	out_vid = out_dir + "/embryo_changes.mp4"
 	vid_frames = [i for i in embryo if i is not None]
 	height, width, layers = vid_frames[0].shape
 	size = (width,height)
