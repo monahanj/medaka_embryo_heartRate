@@ -23,7 +23,7 @@ from scipy.signal import find_peaks, peak_prominences, welch
 from scipy.interpolate import CubicSpline
 
 import matplotlib
-matplotlib.use('Agg')
+#matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 
 from collections import Counter
@@ -92,6 +92,9 @@ clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
 #Kernel for image smoothing
 kernel = np.ones((5,5),np.uint8)
 
+##########################
+##	Functions	##
+##########################
 #Normalise across frames to harmonise intensities (& possibly remove flickering)
 def normVideo(frames):
 
@@ -134,27 +137,6 @@ def detectEyes(frame):
 	eye_mask = cv2.morphologyEx(eye_mask, cv2.MORPH_OPEN, kernel)  
 
 	return(eye_mask)
-
-#Detect oil droplet(s) in embryo sac
-def detectDroplet(frame):
-
-	frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-#	plt.imshow(img,'gray')
-#	plt.show()
-
-
-	frame = img_as_float(frame)
-	#edges = canny(frame, sigma=3)
-	edges = sobel(frame)
-
-	
-
-#	plt.imshow(markers)
-#	plt.axis('off')
-#	plt.show()
-
-	return(frame)
 
 #Pre-process frame
 def processFrame(frame):
@@ -206,14 +188,40 @@ def maskFrame(frame, mask):
 
 	return masked_frame
 
+def filterMask(frame, mask, min_area = 300):
+
+	#Contour mask 
+	contours, hierarchy = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+
+	#Filter contours based on their area
+	filtered_contours = []
+	for i in range(len(contours)):
+		contour = contours[i]
+
+		#Filter contours by their area
+		if cv2.contourArea(contour) >= min_area:
+			filtered_contours.append(contour)
+
+	contours = filtered_contours
+
+	#Create blank mask
+	rows, cols = mask.shape
+	mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
+
+	#Draw and fill-in filtered contours on blank mask
+	cv2.drawContours(mask, contours, -1, 255, thickness = -1)
+
+	#Mask frame
+	masked_frame = maskFrame(frame, mask)
+
+	return masked_frame, mask
+
 #Differences between two frames
-def diffFrame(frame2, frame1):
+def diffFrame(frame, frame2_blur, frame1_blur, min_area = 300):
 	"""Calculate the abs diff between 2 frames and returns frame2 masked with the filtered differences."""
 
-	min_area = 300
-
 	#Absolute differnce between frames
-	abs_diff = cv2.absdiff(frame2,frame1)
+	abs_diff = cv2.absdiff(frame2_blur, frame1_blur)
 
 	#Triangle thresholding on differences
 	triangle = threshold_triangle(abs_diff)
@@ -223,33 +231,84 @@ def diffFrame(frame2, frame1):
 	#Opening to remove noise
 	thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
 
-        #Find contours based on thresholded frame
-	contours, hierarchy = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-
-#	#Filter contours based on their area
-	filtered_contours = []
-	for i in range(len(contours)):
-		contour = contours[i]
-
-		#Filter contours by their area
-		if cv2.contourArea(contour) >= min_area:
-			filtered_contours.append(contour)
-
-	contours = filtered_contours 
-
-	#Create blank mask
-	rows, cols = thresh.shape
-	mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
-
-	#Draw and fill-in filtered contours on blank mask
-	cv2.drawContours(mask, contours, -1, 255, thickness = -1)
-	
-	#Mask frame
-	masked_frame = maskFrame(frame,mask)
+	#Find contours in mask and filter them based on their area
+	masked_frame, mask = filterMask(frame, thresh, min_area = min_area)
 
 	#Return the masked frame, the filtered mask and the absolute differences for the 2 frames
-	#return masked_frame, mask, abs_diff, thresh
-	return masked_frame, mask, thresh
+	#return masked_frame, mask, thresh
+	return masked_frame, thresh
+
+# Forward or reverse rolling window of width w with step size ws
+def rolling_diff(index, frames, win_size = 5, direction = "forward"):
+	"""
+	Implement rolling window 
+	* win_size INT
+		Window size (default = 5)
+	"""
+
+	if direction == "forward":
+		
+		if (index + win_size) > len(frames):
+			window_indices = list(range(index, len(frames)))
+		else:
+			window_indices = list(range(index, index + win_size))
+
+		frame0 = frames[window_indices[0]]
+		_, _, old_blur = processFrame(frame0)
+
+		#Determine absolute differences between current and previous frame
+		#Frame[i] vs. frame[i + 1] ... [i + 4]
+
+		#Generate blank images for masking
+		rows, cols, _ = frame0.shape
+		abs_diffs = np.zeros(shape=[rows, cols], dtype=np.uint8)
+
+		for i in window_indices[1:]:
+
+			frame = frames[i]
+
+			if frame is not None:
+				_, _, frame_blur = processFrame(frame)
+				masked_frame, triangle_thresh = diffFrame(frame, frame_blur, old_blur, min_area = 250)
+				abs_diffs = cv2.add(abs_diffs, triangle_thresh)
+
+		thresh = abs_diffs
+	
+		#Mask frame
+		masked_frame = maskFrame(frame, thresh)	
+
+	elif direction == "reverse":
+
+		if index >= win_size:
+			window_indices = list(range(index, index - win_size, -1))[::-1]
+		else:
+			window_indices = list(range(0, index + 1))
+
+		frame = frames[window_indices[-1]]
+		_, _, frame_blur = processFrame(frame)
+
+		#Determine absolute differences between current and previous frame
+		#Frame[i] vs frame[i - 1] .... [(i - 3]
+
+		#Generate blank images for masking
+		rows, cols, _ = frame.shape
+		abs_diffs = np.zeros(shape=[rows, cols], dtype=np.uint8)
+
+		for i in window_indices[:-1]:
+
+			frame0 = frames[i]
+
+			if frame0 is not None:
+				_, _, old_blur = processFrame(frame0)
+				_, triangle_thresh = diffFrame(frame, frame_blur, old_blur, min_area = 250)
+				abs_diffs = cv2.add(abs_diffs, triangle_thresh)
+
+		thresh = abs_diffs
+
+		#Mask frame
+		masked_frame = maskFrame(frame, thresh)
+
+	return(masked_frame,thresh)
 
 #Calculate RMSSD
 #Root mean square of successive differences
@@ -527,8 +586,8 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 	#Normalise intensities across frames if tiff images
 	if frame_format == "tiff":
-		#sorted_frames = normVideo(sorted_frames)
 		norm_frames = normVideo(sorted_frames)
+
 	#jpegs already normalised
 	else:
 		norm_frames = sorted_frames.copy()
@@ -536,6 +595,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	#Write video
 	vid_frames = [frame for frame in norm_frames if frame is not None]
 	fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+	#fourcc = cv2.VideoWriter_fourcc(*'avc1')
 	height, width, layers = vid_frames[0].shape
 	size = (width,height)
 	out_vid = out_dir + "/embryo.mp4"
@@ -545,9 +605,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	out.release()
 
 	embryo = []
-	#Find first frame that exists
-	#start_frame = next(x for x, frame in enumerate(sorted_frames) if frame is not None)
-	#frame0 = sorted_frames[start_frame]
+	#Start from first non-empty frame
 	start_frame = next(x for x, frame in enumerate(norm_frames) if frame is not None)
 	frame0 = norm_frames[start_frame]
 	embryo.append(frame0)
@@ -556,15 +614,12 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	rows, cols, _ = frame0.shape
 #	eye_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
 	heart_roi = np.zeros(shape=[rows, cols], dtype=np.uint8)
-	heart_roi2 = np.zeros(shape=[rows, cols], dtype=np.uint8)
 
 	#Process frame0
 	old_cl, old_grey, old_blur = processFrame(frame0)
 
 	#Detect eyes in all frames
 #	eye_masks = [detectEyes(frame) for frame in norm_frames if frame is not None]
-
-	#droplet_masks = detectDroplet(frame0)
 
 	#Combine all individual eye masks  
 #	for img in eye_masks:
@@ -574,38 +629,24 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	#Coord 1 = row(s)
 	#Coord 2 = col(s)
 
-	#Detect heart region (and possibly blood vessels)
-	#Frame j vs. j - 1
+	#Detect heart region (and possibly blood vessels) 
+	#by determining the diffeeences across a rolling window of frames
 	j = start_frame + 1
 	while j < len(norm_frames):
 
-#		frame = sorted_frames[j]
 		frame = norm_frames[j]
 
-		#Check if jth frame exists
 		if frame is not None:
-		
-			frame_cl, frame_grey, frame_blur = processFrame(frame)
 
-			#Only compare if both frames exist
-			if frame0 is not None:
+			masked_frame, triangle_thresh = rolling_diff(j, norm_frames, win_size = 5, direction = "reverse")
 
-				#Determine absolute differences between current and previous frame
-				#Frame j vs. j - 1
-				masked_frame, opening, triangle_thresh = diffFrame(frame_blur,old_blur) 
-				heart_roi = cv2.add(heart_roi, triangle_thresh) 
-				embryo.append(masked_frame)
+			heart_roi = cv2.add(heart_roi, triangle_thresh)
 
-			else:
-				embryo.append(None)
+			embryo.append(masked_frame)
+			
 
-			# Update the data for the next comparison(s)
-			old_blur = frame_blur.copy()
-
-		#If frame empty
 		else:
 			embryo.append(None)
-
 		j += 1
 
 	#Get indices of N most changeable pixels
