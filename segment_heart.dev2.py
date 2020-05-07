@@ -630,7 +630,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	#Coord 2 = col(s)
 
 	#Detect heart region (and possibly blood vessels) 
-	#by determining the diffeeences across a rolling window of frames
+	#by determining the differences across windows of frames
 	j = start_frame + 1
 	while j < len(norm_frames):
 
@@ -650,7 +650,8 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		j += 1
 
 	#Get indices of N most changeable pixels
-	changeable_pixels = np.unravel_index(np.argsort(heart_roi.ravel())[-250:], heart_roi.shape)
+	top_pixels = 250
+	changeable_pixels = np.unravel_index(np.argsort(heart_roi.ravel())[-top_pixels:], heart_roi.shape)
 
 	#Create boolean matrix the same size as the RoI image
 	maxima = np.zeros((heart_roi.shape), dtype=bool)
@@ -672,13 +673,15 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	#Find contours based on thresholded, summed absolute differences
 	contours, hierarchy = cv2.findContours(heart_roi_clean, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 
+	rows, cols = heart_roi_clean.shape
+
 	#Filter contours based on which overlaps with the most changeable pixels
-	overlap = 0
+	mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
+	mask_contours = []
 	for i in range(len(contours)):
 		test_contour = contours[i]
 
 		#Create blank mask
-		rows, cols = heart_roi_clean.shape
 		contour_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
 
 		#Calculate overlap with the most changeable pixels i.e. max_opening
@@ -692,44 +695,16 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 		#Calculate ratio between area of intersection and contour area 
 		#ratio = area_of_intersection / contour_mask.sum()	
-		ratio = area_of_intersection 
+		#ratio = area_of_intersection 
 
-		if i == 0:
-			mask = contour_mask
-			overlap = area_of_intersection
-			contour = test_contour
-
-		#TODO
-		#Take all regions that overlap with the the N most changeable pixels
-	
-		elif ratio > overlap:
-			mask = contour_mask
-			overlap = area_of_intersection
-			contour = test_contour
-
-	#Create blank mask
-	rows, cols = heart_roi_clean.shape
-	mask_contour = np.zeros(shape=[rows, cols], dtype=np.uint8)
-	#Draw contour without fill 
-	cv2.drawContours(mask_contour, [contour], -1, (255), 3)
+		#Take all regions that overlap with the the >=10% of the N most changeable pixels
+		if area_of_intersection >= top_pixels *.1:
+			mask_contours.append(test_contour)	
+			mask = cv2.add(mask, contour_mask)
 
 	#Overlay points on RoI
 	overlay = color.label2rgb(label_maxima, image = mask, alpha=0.7, bg_label=0, bg_color=None, colors=[(1, 0, 0)])
 
-	#Expand masked region
-	mask2 = cv2.dilate(mask, kernel, iterations = 1)
-	#Find contours based on thresholded, summed absolute differences
-	contours2, hierarchy = cv2.findContours(mask2, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-	#Take largest contour to be heart
-	contour2 = max(contours2, key = cv2.contourArea)
-
-	#Calculate bounding rectangles
-	(x1, y1, w1, h1) = cv2.boundingRect(contour)
-	box1 = [x1,y1, x1+w1,y1+h1]
-	(x2, y2, w2, h2) = cv2.boundingRect(contour2)
-	#box2 = [x2,y2, x2+w2,y2+h2]
-
-	#Plot heart RoI images
 	out_fig = out_dir + "/embryo_heart_roi.png"
 
 	fig, ax = plt.subplots(2, 2,figsize=(15, 15))
@@ -763,7 +738,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 	timestamp0 = sorted_times[0]
 
-	heart_changes = []
 	#Draw contours of heart
 	for i in range(len(embryo)):
 
@@ -787,8 +761,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			#Coefficient of variation
 			heart_cv =  heart_std / heart_mean
 
-			cropped_frame = masked_data.copy()[y2 : y2 + h2, x2 : x2 + w2]
-#			cropped_frame = raw_frame.copy()[y : y+h, x : x +w]
+#			cropped_frame = masked_data.copy()[y2 : y2 + h2, x2 : x2 + w2]
 
 			# split source frame into B,G,R channels
 			b,g,r = cv2.split(frame)
@@ -801,23 +774,15 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 			masked_frame = cv2.merge((b, g, r))
 
-			#Crop based on bounding rectangle
-			cropped_mask = masked_frame.copy()[y2 : y2 + h2, x2 : x2 + w2]
-
-			#Draw bounding rectangle
-#			cv2.rectangle(masked_frame,(x1,y1),(x1 + w1,y1 + h1),(0,255,0),2)
-
 			#################################
 
 		#No signal in heart RoI if the frame is empty
 		else:
 			masked_frame = None
-			cropped_mask = None
 			heart_std = np.nan
 			heart_cv = np.nan
 
 		embryo[i] = masked_frame
-		heart_changes.append(cropped_mask)
 
 		frame_num = i + 1
 #		stds[frame_num] = heart_std
@@ -1064,5 +1029,4 @@ else:
 
 #Issues 
 #Heart obscured and picks up blood vessels
-#Disconnected heart RoI sections
 #differences in illumination between frames (flickering)
