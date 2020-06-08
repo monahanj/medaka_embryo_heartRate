@@ -17,12 +17,13 @@ from skimage.feature import peak_local_max, canny
 from skimage import color
 
 import scipy
+from scipy import stats
 from scipy import ndimage as ndi
 from scipy.signal import find_peaks, peak_prominences, welch
 from scipy.interpolate import CubicSpline
 
 import matplotlib
-#matplotlib.use('Agg')
+matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 
 from collections import Counter
@@ -440,23 +441,23 @@ for frame in well_frames:
 
 			#If rounded figures are greater than x1 or y1, take 50 off it 
 			if x1_test > x1:
-				x1 = x1_test - 50 #100
+				x1 = x1_test - 50 
 			else:
 				x1 = x1_test
 
 			if y1_test > y1:
-				y1 = y1_test - 50 #100
+				y1 = y1_test - 50 
 			else:
 				y1 = y1_test
 
 			#If rounded figures are less than x2 or y2, add 50 
 			if x2_test < x2:
-				x2 = x2_test + 50 #100
+				x2 = x2_test + 50 
 			else:
 				x2 = x2_test
 
 			if y2_test < y2:
-				y2 = y2_test + 50 #100
+				y2 = y2_test + 50 
 			else:
 				y2 = y2_test
 
@@ -637,11 +638,11 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 		if frame is not None:
 
-			masked_frame, triangle_thresh = rolling_diff(j, norm_frames, win_size = 5, direction = "reverse", min_area = 250)
-			#masked_frame, triangle_thresh = rolling_diff(j, norm_frames, win_size = 5, direction = "reverse", min_area = 300)
+#			masked_frame, triangle_thresh = rolling_diff(j, norm_frames, win_size = 3, direction = "reverse", min_area = 300)
+			#masked_frame, triangle_thresh = rolling_diff(j, norm_frames, win_size = 3, direction = "reverse", min_area = 250)
+			masked_frame, triangle_thresh = rolling_diff(j, norm_frames, win_size = 3, direction = "reverse", min_area = 150)
 
 			heart_roi = cv2.add(heart_roi, triangle_thresh)
-
 			embryo.append(masked_frame)
 
 		else:
@@ -659,6 +660,9 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	maxima[changeable_pixels] = True
 	label_maxima = label(maxima)
 
+	#Round of opening before thresholding
+	heart_roi = cv2.morphologyEx(heart_roi, cv2.MORPH_OPEN, kernel)
+
 	#Threshold heart RoI to generate mask
 	yen = threshold_yen(heart_roi)
 	heart_roi_clean = heart_roi > yen
@@ -666,7 +670,8 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 	#Filter mask based on area of contours
 	#heart_roi_clean = filterMask(mask = heart_roi_clean, min_area = 500)
-	heart_roi_clean = filterMask(mask = heart_roi_clean, min_area = 1000)
+	#heart_roi_clean = filterMask(mask = heart_roi_clean, min_area = 300)
+	heart_roi_clean = filterMask(mask = heart_roi_clean, min_area = 150)
 
 	#Scikit image to opencv
 	#cv_image = img_as_ubyte(any_skimage_image)
@@ -677,6 +682,11 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	contours, _ = cv2.findContours(heart_roi_clean, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 
 	rows, cols = heart_roi_clean.shape
+
+	out_fig = out_dir + "/embryo.frame_diff.png"
+	plt.imshow(heart_roi)
+	plt.savefig(out_fig,bbox_inches='tight')
+	plt.close()
 
 	#Filter contours based on which overlaps with the most changeable pixels
 	final_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
@@ -733,69 +743,20 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		aspect_ratio = float(width) / float(height)
 
 		#Take all regions that overlap with the the >=20% of the N most changeable pixels
-		#if area_of_intersection >= top_pixels *.1:
-		if (pixel_ratio >= 0.3) and (overlap_pixels >= (top_pixels * 0.25)):
+		if overlap_pixels >= (top_pixels * 0.25):
+#		if overlap_pixels >= (top_pixels * 0.2):
 
-			print("1")
 			mask_contours.append(test_contour)
 			final_mask = cv2.add(final_mask, contour_mask)
 
-		elif (area_ratio >= 0.4) and (overlap_pixels >= (top_pixels *.25)):
-			mask_contours.append(test_contour)	
-			final_mask = cv2.add(final_mask, contour_mask)
+		#Compare ratio of areas for contour to rectangle
+		#Determines how much the contoured area fills the parallelogram
+#		area_ratio = contour_area / rect_area 
 
-#			rect_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
-
-#			box = cv2.boxPoints(rect) # cv2.boxPoints(rect) for OpenCV 3.x
-#			box = np.int0(box)
-#			cv2.drawContours(rect_mask,[box],0,(255),-1)
-
-#			print("pixel_ratio",pixel_ratio)
-#			print("area_ratio", area_ratio)
-			#Contour of intersection
-#			fig, ax = plt.subplots(nrows=2, ncols=2,figsize=(10,5))
-#			ax[0, 0].imshow(maxima)
-#			ax[1, 0].imshow(overlap)
-#			ax[0, 1].imshow(contour_mask)
-#			ax[1, 1].imshow(rect_mask)
-#			plt.show()
-
-		elif (pixel_ratio > 0.3) and (overlap_pixels >= (top_pixels * 0.1)):
-
-			pass
-
-#			print("3")
-#			print(pixel_ratio)
-#			print(area_ratio)
-
-			#Contour of intersection
-#			fig, ax = plt.subplots(nrows=2, ncols=2,figsize=(10,5))
-#			ax[0, 0].imshow(maxima)
-#			ax[1, 0].imshow(overlap)
-#			ax[0, 1].imshow(contour_mask)
-#			ax[1, 1].imshow(rect_mask)
-#			plt.show()
-
-#			mask_contours.append(test_contour)
-#			final_mask = cv2.add(final_mask, contour_mask)
-
-			#Compare ratio of areas for contour to rectangle
-			#Determines how much the contoured area fills the parallelogram
-#			area_ratio = contour_area / rect_area 
-
-#			if area_ratio >= 0.5:
+#		if area_ratio >= 0.5:
 			
-#				mask_contours.append(test_contour)	
-#				final_mask = cv2.add(final_mask, contour_mask)
-
-
-		else:
-			print("4")
-				
-#				print("contour area", contour_area)
-#				print("area ratio", area_ratio)
-
-#				print("aspect ratio", aspect_ratio)
+#			mask_contours.append(test_contour)	
+#			final_mask = cv2.add(final_mask, contour_mask)
 
 	#Check if heart region was detected, i.e. if sum(masked) > 0
 	if final_mask.sum() > 0:  
@@ -825,8 +786,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 		plt.savefig(out_fig,bbox_inches='tight')
 		plt.close()
-
-		print("Determining heart rate (bpm)\n") 
 
 		#Signal standard deviation
 		#stds = {}
@@ -975,12 +934,37 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 				signal = y_final[i]
 				output.write(str(time) + "\t" + str(signal) + "\n")
 
+		#Calculate slope
+		#Presumably should be flat(ish) if good
+		#Or fit line
+
+		slope, intercept, r_value, p_value, std_err = stats.linregress(times, y_final)
+
+		mad = stats.median_absolute_deviation(y_final)
+
+#		print("MAD")
+#		print(mad)
+#		print(slope)
+
+		# Create a list of values in the best fit line
+#		abline_values = [slope * i + intercept for i in times]
+
+#		print("slope", "intercept", "r_value", "p_value", "std_err")
+#		print(slope, intercept, r_value, p_value, std_err)
+
 		#Find peaks in heart ROI signal, peaks only those above the mean stdev
 		#Minimum distance of 2 between peaks
 		peaks, _ = find_peaks(y_final, height = meanY)
 
 		#Peak prominence
 		prominences = peak_prominences(y_final, peaks)
+
+
+		out_file = out_dir + "/signal.stats.txt"
+		with open(out_file, 'w') as output:
+
+			output.write("well\tmad\tslope\tp_value\tr_value\n")
+			output.write(well_number + "\t" + str(mad) + "\t" + str(slope) + "\t" + str(p_value) + "\t" + str(r_value) + "\n")
 
 		out_fig = out_dir + "/bpm_prominences.png"
 		contour_heights = y[peaks] - prominences
@@ -989,6 +973,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		plt.ylabel('Heart ROI intensity (CoV)')
 		plt.vlines(x=peaks, ymin=contour_heights, ymax=y_final[peaks])
 		plt.hlines(y = meanY, xmin = 0, xmax = len(y_final), linestyles = "dashed")
+
 		plt.savefig(out_fig,bbox_inches='tight')
 		plt.close()
 
@@ -1001,56 +986,50 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			#peak_times = times[peaks]
 
 			peak_times = times[peaks[prominent_peaks]]
-			peak_signal = y[peaks[prominent_peaks]]
-
-			beats = len(peaks[prominent_peaks])
-			#beats per second
-			bps = beats / times[-1]
-			bpm = bps * 60
-			bpm = np.around(bpm) #, decimals=1)
+			#peak_signal = y[peaks[prominent_peaks]]
+			peak_signal = y_final[peaks[prominent_peaks]]
 
 			out_fig2 = out_dir + "/bpm_trace.peaks.png"
-
-			if bpm < 300 and bpm > 60:
-				bpm_label = "BPM = " +  str(int(bpm))
-			else:
-				bpm_label = "BPM = " +  str(int(bpm)) + " (uneliable)"
 
 			plt.plot(times, y)
 			plt.plot(peak_times, peak_signal, "x")
 			plt.ylabel('Heart ROI intensity (CoV)')
 			plt.xlabel('Time [sec]')
-
-			#Label trace with bpm
-			plt.title(bpm_label)
 			plt.hlines(y = meanY, xmin = times[0], xmax = times[-1], linestyles = "dashed")
 			plt.savefig(out_fig2)
 			plt.close()
 
+			bpm = "NA"
 			#Root mean square of successive differences
 			#first calculating each successive time difference between heartbeats in ms. Then, each of the values is squared and the result is averaged before the square root of the total is obtained
 
-			rmssd = getRMSSD(peak_times)
+#			rmssd = getRMSSD(peak_times)
 
 			#Calculate beat-to-beat times
 			#(time between peaks)
-			peak2peak = [t2 - t1 for t1, t2 in zip(peak_times, peak_times[1:])]
+#			peak2peak = [t2 - t1 for t1, t2 in zip(peak_times, peak_times[1:])]
 
 			#Square peak2peak
-			peak2peak_sq = [i**2 for i in peak2peak]
+#			peak2peak_sq = [i**2 for i in peak2peak]
 
 			#Average squared peak2peak
-			mean_peak2peak_sq = np.mean(peak2peak_sq)
+#			mean_peak2peak_sq = np.mean(peak2peak_sq)
 
 			#Square root of Average squared peak2peak
-			rmssd = np.sqrt(mean_peak2peak_sq)
+#			rmssd = np.sqrt(mean_peak2peak_sq)
 
 			#for R–R interval time series 
+			#Fourier Transform
+			Fs = round(1/ np.mean(np.diff(td)))
 
+
+			from scipy.fft import fft
+			
+	
 			#Welch's Method for spectral analysis
 			Fs = round(1/ np.mean(np.diff(td)))
 			window = np.hanning(3*Fs)
-			f, p_density = welch(x = cs(td), window = window, fs = Fs, nfft = np.power(2,14), return_onesided=True, detrend=False)
+			f, p_density = welch(x = cs(td), window = window, fs = Fs, nfft = np.power(2,14), return_onesided=True, detrend="constant")
 			p_final = 10*np.log10(p_density)
 
 			#Calculate ylims for xrange 1 to 6
@@ -1096,7 +1075,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			plt.savefig(out_fig3)
 			plt.close()
 
-			bpm = np.around(bpm, decimals=2)
+#			bpm = np.around(bpm, decimals=2)
 			bpm_welch = np.around(bpm_welch, decimals=2)
 			#Write bpm estimates to file
 			out_file = out_dir + "/heart_rate.txt"
@@ -1110,23 +1089,31 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			#Write bpm to file
 			with open(out_file, 'w') as output:
 
-				output.write("well\twell_id\tbpm\tbpm_spectra\n")
-				output.write(well_number + "\t" + well + "\tNA\tNA\n")
+				output.write("well\twell_id\tbpm\tbpm_spectra\tnote\n")
+				output.write(well_number + "\t" + well + "\tNA\tNA\tfew_peaks\n")
+				#output.write("well\twell_id\tbpm\tbpm_spectra\n")
+				#output.write(well_number + "\t" + well + "\tNA\tNA\n")
 	else:
 		out_file = out_dir + "/heart_rate.txt"
 		#Write bpm to file
 		with open(out_file, 'w') as output:
 
-			output.write("well\twell_id\tbpm\tbpm_spectra\n")
-			output.write(well_number + "\t" + well + "\tNA\tNA\n")
+			output.write("well\twell_id\tbpm\tbpm_spectra\tnote\n")
+			output.write(well_number + "\t" + well + "\tNA\tNA\tno_heart_roi\n")
+			#output.write("well\twell_id\tbpm\tbpm_spectra\n")
+			#output.write(well_number + "\t" + well + "\tNA\tNA\n")
+
 
 else:
 	out_file = out_dir + "/heart_rate.txt"
 	#Write bpm to file
 	with open(out_file, 'w') as output:
 
-		output.write("well\twell_id\tbpm\tbpm_spectra\n")
-		output.write(well_number + "\t" + well + "\tNA\tNA\n")
+		output.write("well\twell_id\tbpm\tbpm_spectra\nnote\n")
+		output.write(well_number + "\t" + well + "\tNA\tNA\tempty_frames\n")
+		#output.write("well\twell_id\tbpm\tbpm_spectra\n")
+		#output.write(well_number + "\t" + well + "\tNA\tNA\n")
+
 
 #Welch’s method [R145] computes an estimate of the power spectral density by dividing the data into overlapping segments, computing a modified periodogram for each segment and averaging the periodograms.
 #https://docs.scipy.org/doc/scipy-0.14.0/reference/generated/scipy.signal.welch.html
