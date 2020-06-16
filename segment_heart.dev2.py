@@ -959,12 +959,16 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		#Peak prominence
 		prominences = peak_prominences(y_final, peaks)
 
+		if np.float64(p_value) < np.float_power(10, -8):
+			sig = "sig"
+		else:
+			sig = "no"
 
 		out_file = out_dir + "/signal.stats.txt"
 		with open(out_file, 'w') as output:
 
 			output.write("well\tmad\tslope\tp_value\tr_value\n")
-			output.write(well_number + "\t" + str(mad) + "\t" + str(slope) + "\t" + str(p_value) + "\t" + str(r_value) + "\n")
+			output.write(well_number + "\t" + str(mad) + "\t" + str(slope) + "\t" + str(p_value) + "\t" + str(r_value) + "\t" + sig + "\n")
 
 		out_fig = out_dir + "/bpm_prominences.png"
 		contour_heights = y[peaks] - prominences
@@ -980,9 +984,12 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 #		prominent_peaks = [idx for idx, prominence in enumerate(prominences[0]) if prominence > 0.2] 
 		prominent_peaks = [idx for idx, prominence in enumerate(prominences[0])]
 
-		#Only calculate if more than 4 beats are detected
-		if len(peaks[prominent_peaks]) > 4:
+		#Filter out if linear regression captures signal trend well
+		#(i.e. if p-value highly significant)
+#		if (np.float64(p_value) > np.float_power(10, -10)) or (mad < 0.02):
+		if (np.float64(p_value) > np.float_power(10, -8)) or (mad < 0.02) or (slope >= np.absolute(0.002)):
 
+		#slope >= 0.002
 			#peak_times = times[peaks]
 
 			peak_times = times[peaks[prominent_peaks]]
@@ -1020,10 +1027,10 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 			#for R–R interval time series 
 			#Fourier Transform
-			Fs = round(1/ np.mean(np.diff(td)))
+#			Fs = round(1/ np.mean(np.diff(td)))
 
 
-			from scipy.fft import fft
+		#	from scipy.fft import fft
 			
 	
 			#Welch's Method for spectral analysis
@@ -1043,7 +1050,29 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			p_max = heart_range[heart_peak]
 			ylims = (p_min -1, p_max +1) 
 
-			freq_peaks, _ = find_peaks(p_density)
+
+			freq_peaks, _ = find_peaks(p_final)
+			#Peak prominence
+			freq_prominences = peak_prominences(p_final, freq_peaks)
+			prominent_peaks = [idx for idx, prominence in enumerate(freq_prominences[0])]
+
+			peaks_values = f[freq_peaks[prominent_peaks]]
+			prominent_values = p_final[freq_peaks[prominent_peaks]]
+
+#			print(freq_prominences[0])
+
+			prominent_peaks2, _ = find_peaks(p_final, prominence=10)
+#			print(prominent_peaks2)
+			peaks_values2 = f[prominent_peaks2]
+			prominent_values2 = p_final[prominent_peaks2]
+
+
+
+#			plt.semilogx(f, p_final)
+##			plt.semilogx(peaks_values, prominent_values, "x")
+#			plt.semilogx(peaks_values2, prominent_values2, "o")
+#			plt.show()
+
 
 			#calculate beats per min from frequency spectra	
 			bpm_welch = f[heart_freq][heart_peak] * 60
@@ -1058,15 +1087,20 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			fig, [ax1,ax2] = plt.subplots(nrows=2, ncols=1, figsize=(10, 10))
 			#Plot all power spectra
 			ax1.semilogx(f, p_final)
+			ax1.semilogx(peaks_values, prominent_values, "x")
 			ax1.set_ylabel('Power Spectrum (dB/Hz)')
 
 			ax2.plot(f, p_final)
-			ax2.plot(f[heart_freq][heart_peak], p_final[heart_freq][heart_peak], "x") #Peak
+			ax2.plot(peaks_values, prominent_values, "x")
+#			ax2.plot(f[heart_freq][heart_peak], p_final[heart_freq][heart_peak], "x") #Peak
 			ax2.set_xlim((0.75, 6))
 			ax2.set_ylim(ylims)        
 			ax2.vlines(x=f[heart_freq][heart_peak], ymin=ylims[0], ymax=p_final[heart_freq][heart_peak], linestyles = "dashed")
 			ax2.hlines(y=p_final[heart_freq][heart_peak], xmin=0.75, xmax=f[heart_freq][heart_peak], linestyles = "dashed")
 			ax2.set_title(bpm_label2, loc='right')
+#			ax2.ticklabel_format(style='plain')
+#			ax2.xaxis.set_minor_formatter(mticker.ScalarFormatter())
+#			ax2.get_xaxis().get_major_formatter().set_scientific(False)
 
 			fig.suptitle("Power spectral density of HRV")
 			plt.xlabel('Frequency (Hz)')
