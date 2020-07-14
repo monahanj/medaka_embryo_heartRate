@@ -159,18 +159,14 @@ def processFrame(frame):
 	out_frame = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
 
 	#Convert to greyscale
-#	frame_grey = cv2.cvtColor(out_frame, cv2.COLOR_BGR2GRAY)
-	frame_grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-	# Improve contrast with CLAHE (Contrast Limited Adaptive Histogram Equalization)
-#	cl = clahe.apply(frame_grey)
+	frame_grey = cv2.cvtColor(out_frame, cv2.COLOR_BGR2GRAY)
+#	frame_grey = cl 
 
 	#Convert CLAHE-normalised greyscale frame back to BGR
-#	out_frame = cv2.cvtColor(cl, cv2.COLOR_GRAY2BGR)
+	out_frame = cv2.cvtColor(frame_grey, cv2.COLOR_GRAY2BGR)
 
 	#Blur the CLAHE frame
 	#Blurring kernel numbers must be odd integers
-#	blurred_frame = cv2.GaussianBlur(cl, (9, 9), 0) 
 	blurred_frame = cv2.GaussianBlur(frame_grey, (9, 9), 0) 
 
 	return out_frame, frame_grey, blurred_frame
@@ -210,9 +206,6 @@ def filterMask(mask, min_area = 300):
 
 	#Draw and fill-in filtered contours on blank mask
 	cv2.drawContours(filtered_mask, contours, -1, 255, thickness = -1)
-
-	#Mask frame
-#	masked_frame = maskFrame(frame, filtered_mask)
 
 	return filtered_mask
 
@@ -312,6 +305,149 @@ def rolling_diff(index, frames, win_size = 5, direction = "forward", min_area = 
 	masked_frame = maskFrame(frame, thresh)
 
 	return(masked_frame,abs_diffs)
+
+#Perform a Fourier Transform on interpolated signal from heart region
+def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 6)):
+
+	"""
+	When 3 or less peaks detected is Fourier, 
+	the true heart-rate is usually the first one.
+	The second peak may be higher in some circumstances 
+	if BOTH chambers were segmented.
+	Fourier seems to detect frequencies coreesponding to 
+	1 beat, 2 beats and/or 3 beats in this situation. 
+	"""
+
+	#Fast fourier transform
+	fourier = np.fft.fft(interpolated_signal(time_domain))
+	# Power Spectral Density
+	psd = np.abs(fourier) ** 2
+
+	N = interpolated_signal(time_domain).size
+	timestep =  np.mean(np.diff(time_domain))
+	freqs = np.fft.fftfreq(N, d=timestep)
+
+	#one-sided Fourier spectra
+	psd = psd[freqs > 0]
+	freqs = freqs[freqs > 0]
+
+	#Calculate ylims for xrange 0.5 to 6 Hz
+	heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))
+	heart_psd = psd[heart_indices]
+	heart_freqs = freqs[heart_indices]
+
+	#Peak Calling on Fourier Transform data
+	peaks, _ = find_peaks(psd)
+	heart_peaks, _ = find_peaks(heart_psd)
+
+	#Filter out peaks lower than 1
+	heart_peaks = heart_peaks[heart_psd[heart_peaks] >= 1]
+
+	n_peaks = len(heart_peaks)
+	if n_peaks > 1:
+
+		#Determine the peak within the heart range
+		max_peak = max(heart_psd[heart_peaks])
+
+		#Filter peaks based on ratio to largest peak
+		filtered_peaks = heart_peaks[heart_psd[heart_peaks] >= (max_peak * 0.25)]
+
+		#Calculate heart rate in beats per minute (bpm) from the results of the Fourier Analysis
+		n_filtered = len(filtered_peaks)
+#		if n_filtered > 0:
+		if 0 < n_filtered < 4:
+			beat_freq = heart_freqs[filtered_peaks[0]]
+			beat_power = heart_psd[filtered_peaks[0]]
+
+			bpm = beat_freq * 60 
+			peak_coord  = (beat_freq, beat_power)
+
+#		elif  0 < n_filtered < 4:
+
+		else:
+			bpm = "NA"			
+			peak_coord = None
+
+	return(psd, freqs, peak_coord, bpm)
+
+#Plot Fourier Transform
+def plotFourier(psd, freqs, peak, bpm, heart_range, figure_loc = 211):
+
+	#Prepare label for plot
+	try:
+		bpm_label = "Heart rate = " + str(int(bpm)) + " bpm"
+	except ValueError:
+		bpm_label = "Heart rate = " + str(bpm)
+
+	ax = plt.subplot(figure_loc)
+ 
+	#Plot frequency of Fourier Power Spectra
+	_ = ax.plot(freqs,psd)
+
+	#Plot frequency peak if given
+	if peak is not None:
+		#Put x on freq that correpsonds to heart rate
+		_ = ax.plot(peak[0], peak[1],"x")
+		#Dotted line to peak
+		_ = ax.vlines(x = peak[0], ymin = 0, ymax = peak[1], linestyles = "dashed")
+		_ = ax.hlines(y = peak[1], xmin = 0, xmax = peak[0], linestyles = "dashed")
+		#Annotate with BPM
+		_ = ax.annotate(bpm_label, xy=peak, xytext=(peak[0] + 0.5 , peak[1] + 1),arrowprops=dict(facecolor='black', shrink=0.05))
+
+	# Only plot within heart range (in Hertz) if necessary
+	if heart_range is not None:
+		_ = ax.set_xlim(heart_range)
+
+	_ = ax.set_ylim(top = max(psd) + 8)
+
+	#Y-axis label
+	_ = ax.set_ylabel('Power Spectra')
+
+	return(ax)
+
+#Perform Welch's Power method on interpolated signal from heart region
+def welchHR(interpolated_signal, time_domain, heart_range = (1, 6)):
+
+	Fs = round(1/  np.mean(np.diff(time_domain)))
+ 	window = np.hanning(3*Fs)
+
+	#Welch's Power Method
+	freqs, p_density = welch(x = interpolated_signal(time_domain), window = window, fs = Fs, nfft = np.power(2,14), return_onesided=True, detrend="constant")
+
+	p_final = 10*np.log10(p_density)
+
+        #Calculate ylims for xrange 1 to 6 Hz
+	#heart_freq = np.where(np.logical_and(f>=1, f<=6))
+	heart_indices = np.where(np.logical_and(freqs>=1, freqs<=6))
+
+        #Calculate ylims for xrange 0.5 to 6 Hz
+        heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))
+        heart_freqs = freqs[heart_indices]
+        heart_psd = p_final[heart_indices]
+
+	#Determine the peak within the range
+	heart_peak = np.argmax(heart_psd)
+
+	p_min = np.amin(heart_psd)
+	p_max = heart_range[heart_peak]
+	ylims = (p_min -1, p_max +1)
+
+        freq_peaks, _ = find_peaks(p_final)
+
+	#Peak prominence
+	freq_prominences = peak_prominences(p_final, freq_peaks)
+	prominent_peaks = [idx for idx, prominence in enumerate(freq_prominences[0])]
+	
+	peaks_values = freqs[freq_peaks[prominent_peaks]]
+	prominent_values = p_final[freq_peaks[prominent_peaks]]
+#
+	#prominent_peaks2, _ = find_peaks(p_final, prominence=12)
+	#peaks_values2 = f[prominent_peaks2]
+	#prominent_values2 = p_final[prominent_peaks2]
+
+	bpm = freqs[heart_freq][heart_peak] * 60
+
+	return(bpm)
 
 #Calculate RMSSD
 #Root mean square of successive differences
@@ -584,7 +720,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		total_time = (timestamp_final - timestamp0) / 1000 
 		fps = int(len(sorted_times) / round(total_time))
 
-	#Normalise intensities across frames if tiff images
+	#Normalise intensities across frames by max pixel if tiff images
 	if frame_format == "tiff":
 		norm_frames = normVideo(sorted_frames)
 
@@ -617,6 +753,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 	#Process frame0
 	old_cl, old_grey, old_blur = processFrame(frame0)
+	f0_grey = old_grey.copy()
 
 	#Detect eyes in all frames
 #	eye_masks = [detectEyes(frame) for frame in norm_frames if frame is not None]
@@ -638,9 +775,9 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 		if frame is not None:
 
-#			masked_frame, triangle_thresh = rolling_diff(j, norm_frames, win_size = 3, direction = "reverse", min_area = 300)
 			#masked_frame, triangle_thresh = rolling_diff(j, norm_frames, win_size = 3, direction = "reverse", min_area = 250)
-			masked_frame, triangle_thresh = rolling_diff(j, norm_frames, win_size = 3, direction = "reverse", min_area = 150)
+#			masked_frame, triangle_thresh = rolling_diff(j, norm_frames, win_size = 3, direction = "reverse", min_area = 150)
+			masked_frame, triangle_thresh = rolling_diff(j, norm_frames, win_size = 2, direction = "reverse", min_area = 150)
 
 			heart_roi = cv2.add(heart_roi, triangle_thresh)
 			embryo.append(masked_frame)
@@ -743,8 +880,8 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		aspect_ratio = float(width) / float(height)
 
 		#Take all regions that overlap with the the >=20% of the N most changeable pixels
-		if overlap_pixels >= (top_pixels * 0.25):
-#		if overlap_pixels >= (top_pixels * 0.2):
+		if overlap_pixels >= (top_pixels * 0.2):
+#		if overlap_pixels >= (top_pixels * 0.25):
 
 			mask_contours.append(test_contour)
 			final_mask = cv2.add(final_mask, contour_mask)
@@ -768,7 +905,8 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 		fig, ax = plt.subplots(2, 2,figsize=(15, 15))
 		#First  frame
-		ax[0, 0].imshow(norm_frames[start_frame])
+		#ax[0, 0].imshow(norm_frames[start_frame])
+		ax[0, 0].imshow(f0_grey,cmap='gray')
 		ax[0, 0].set_title('Embryo',fontsize=10)
 		ax[0, 0].axis('off')
 		#Summed Absolute Difference
@@ -921,7 +1059,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			y_final[empty_frames] = cs(times[empty_frames])
 
 		meanY = np.mean(y_final)
-		#xnorm = y_final - meanY
 
 		#Write Signal to file
 		out_signal = out_dir + "/medaka_heart.signal_CoV.txt"
@@ -941,16 +1078,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		slope, intercept, r_value, p_value, std_err = stats.linregress(times, y_final)
 
 		mad = stats.median_absolute_deviation(y_final)
-
-#		print("MAD")
-#		print(mad)
-#		print(slope)
-
-		# Create a list of values in the best fit line
-#		abline_values = [slope * i + intercept for i in times]
-
-#		print("slope", "intercept", "r_value", "p_value", "std_err")
-#		print(slope, intercept, r_value, p_value, std_err)
 
 		#Find peaks in heart ROI signal, peaks only those above the mean stdev
 		#Minimum distance of 2 between peaks
@@ -987,13 +1114,11 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		#Filter out if linear regression captures signal trend well
 		#(i.e. if p-value highly significant)
 #		if (np.float64(p_value) > np.float_power(10, -10)) or (mad < 0.02):
-		if (np.float64(p_value) > np.float_power(10, -8)) or (mad < 0.02) or (slope >= np.absolute(0.002)):
+		if (np.float64(p_value) > np.float_power(10, -8)) or (mad <= 0.02) or (np.absolute(slope) <= 0.002):
 
-		#slope >= 0.002
 			#peak_times = times[peaks]
 
 			peak_times = times[peaks[prominent_peaks]]
-			#peak_signal = y[peaks[prominent_peaks]]
 			peak_signal = y_final[peaks[prominent_peaks]]
 
 			out_fig2 = out_dir + "/bpm_trace.peaks.png"
@@ -1007,6 +1132,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			plt.close()
 
 			bpm = "NA"
+
 			#Root mean square of successive differences
 			#first calculating each successive time difference between heartbeats in ms. Then, each of the values is squared and the result is averaged before the square root of the total is obtained
 
@@ -1026,47 +1152,49 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 #			rmssd = np.sqrt(mean_peak2peak_sq)
 
 			#for R–R interval time series 
-			#Fourier Transform
-#			Fs = round(1/ np.mean(np.diff(td)))
 
-
-		#	from scipy.fft import fft
+			#Heart range in Hz
+			heart_range = (0.5, 6)
 			
+			#Perform Fourier Analysis 
+			psd, freqs, peak, bpm_fourier = fourierHR(cs, td, heart_range)
+
+			#Plot full. one-sided Fourier Transform 
+			ax = plotFourier(psd = psd, freqs = freqs, peak = None, bpm = bpm_fourier, heart_range = None, figure_loc = 211)
+			ax.set_title("Power spectral density of HRV")
+
+			#Plot one-sided Fourier within specified range
+			ax = plotFourier(psd = psd, freqs = freqs, peak = peak, bpm = bpm_fourier, heart_range = heart_range, figure_loc = 212)
+
+			plt.xlabel('Frequency (Hz)')
+
+		
+			out_fourier = out_dir + "/bpm_power_spectra.fourier.png"
+			plt.savefig(out_fourier)#, bbox_inches='tight')
+			plt.close()
+
+
+			#fig, [ax1,ax2] = plt.subplots(nrows=2, ncols=1, figsize=(10, 10))
+
+			#TODO
+			#Wavelet Analysis
+			#import pywt
+#			import pycwt as wavelet
+#			dt = timestep		
+#			t = td
+#			p = np.polyfit(t - t[0], cs(td), 1)
+#			dat_notrend = cs(td) - np.polyval(p, td - td[0])
+#			std = dat_notrend.std()  # Standard deviation
+#			var = std ** 2  # Variance
+#			dat_norm = dat_notrend / std	
+
+#			out_fig = out_dir + "/bpm_trace.detrended.png"
+#			plt.plot(td, dat_norm)
+#			plt.savefig(out_fig)
+#			plt.close()
 	
 			#Welch's Method for spectral analysis
-			Fs = round(1/ np.mean(np.diff(td)))
-			window = np.hanning(3*Fs)
-			f, p_density = welch(x = cs(td), window = window, fs = Fs, nfft = np.power(2,14), return_onesided=True, detrend="constant")
-			p_final = 10*np.log10(p_density)
-
-			#Calculate ylims for xrange 1 to 6
-			heart_freq = np.where(np.logical_and(f>=1, f<=6))
-			heart_range = p_final[heart_freq]
-
-			#Determine the peak within the range
-			heart_peak = np.argmax(p_final[heart_freq])
-
-			p_min = np.amin(heart_range)
-			p_max = heart_range[heart_peak]
-			ylims = (p_min -1, p_max +1) 
-
-
-			freq_peaks, _ = find_peaks(p_final)
-			#Peak prominence
-			freq_prominences = peak_prominences(p_final, freq_peaks)
-			prominent_peaks = [idx for idx, prominence in enumerate(freq_prominences[0])]
-
-			peaks_values = f[freq_peaks[prominent_peaks]]
-			prominent_values = p_final[freq_peaks[prominent_peaks]]
-
-#			print(freq_prominences[0])
-
-			prominent_peaks2, _ = find_peaks(p_final, prominence=10)
-#			print(prominent_peaks2)
-			peaks_values2 = f[prominent_peaks2]
-			prominent_values2 = p_final[prominent_peaks2]
-
-
+			bpm_welch =  welchHR(interpolated_signal = cs, time_domain = td, heart_range = (1, 6))
 
 #			plt.semilogx(f, p_final)
 ##			plt.semilogx(peaks_values, prominent_values, "x")
@@ -1087,20 +1215,18 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			fig, [ax1,ax2] = plt.subplots(nrows=2, ncols=1, figsize=(10, 10))
 			#Plot all power spectra
 			ax1.semilogx(f, p_final)
-			ax1.semilogx(peaks_values, prominent_values, "x")
+			#ax1.semilogx(peaks_values, prominent_values, "x")
+			ax1.semilogx(peaks_values2, prominent_values2, "x")
 			ax1.set_ylabel('Power Spectrum (dB/Hz)')
 
 			ax2.plot(f, p_final)
-			ax2.plot(peaks_values, prominent_values, "x")
+			ax2.plot(peaks_values2, prominent_values2, "x")
 #			ax2.plot(f[heart_freq][heart_peak], p_final[heart_freq][heart_peak], "x") #Peak
 			ax2.set_xlim((0.75, 6))
 			ax2.set_ylim(ylims)        
 			ax2.vlines(x=f[heart_freq][heart_peak], ymin=ylims[0], ymax=p_final[heart_freq][heart_peak], linestyles = "dashed")
 			ax2.hlines(y=p_final[heart_freq][heart_peak], xmin=0.75, xmax=f[heart_freq][heart_peak], linestyles = "dashed")
 			ax2.set_title(bpm_label2, loc='right')
-#			ax2.ticklabel_format(style='plain')
-#			ax2.xaxis.set_minor_formatter(mticker.ScalarFormatter())
-#			ax2.get_xaxis().get_major_formatter().set_scientific(False)
 
 			fig.suptitle("Power spectral density of HRV")
 			plt.xlabel('Frequency (Hz)')
@@ -1118,6 +1244,9 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 				output.write("well\twell_id\tbpm\tbpm_spectra\n")
 				output.write(well_number + "\t" + well + "\t" +  str(bpm) + "\t" + str(bpm_welch) + "\n")
 	
+			print("bpm_fourier", str(bpm_fourier))
+			print("bpm_welch", str(bpm_welch))
+
 		else:
 			out_file = out_dir + "/heart_rate.txt"
 			#Write bpm to file
