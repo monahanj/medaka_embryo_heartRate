@@ -306,6 +306,20 @@ def rolling_diff(index, frames, win_size = 5, direction = "forward", min_area = 
 
 	return(masked_frame,abs_diffs)
 
+#Detrend heart signal and normalise
+def detrendSignal(interpolated_signal, time_domain):
+
+	p = np.polyfit(time_domain - time_domain[0], interpolated_signal(time_domain), 1)
+
+	dat_notrend = interpolated_signal(time_domain) - np.polyval(p, time_domain - time_domain[0])
+
+	std = dat_notrend.std()  # Standard deviation
+	var = std ** 2  # Variance
+
+	normalised_signal = dat_notrend / std 
+
+	return(normalised_signal)
+
 #Perform a Fourier Transform on interpolated signal from heart region
 def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 6)):
 
@@ -409,21 +423,17 @@ def plotFourier(psd, freqs, peak, bpm, heart_range, figure_loc = 211):
 def welchHR(interpolated_signal, time_domain, heart_range = (1, 6)):
 
 	Fs = round(1/  np.mean(np.diff(time_domain)))
- 	window = np.hanning(3*Fs)
+	window = np.hanning(3*Fs)
 
 	#Welch's Power Method
 	freqs, p_density = welch(x = interpolated_signal(time_domain), window = window, fs = Fs, nfft = np.power(2,14), return_onesided=True, detrend="constant")
 
 	p_final = 10*np.log10(p_density)
 
-        #Calculate ylims for xrange 1 to 6 Hz
-	#heart_freq = np.where(np.logical_and(f>=1, f<=6))
-	heart_indices = np.where(np.logical_and(freqs>=1, freqs<=6))
-
-        #Calculate ylims for xrange 0.5 to 6 Hz
+	#Calculate ylims for xrange 1 to 6 Hz
         heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))
-        heart_freqs = freqs[heart_indices]
-        heart_psd = p_final[heart_indices]
+	heart_freqs = freqs[heart_indices]
+	heart_psd = p_final[heart_indices]
 
 	#Determine the peak within the range
 	heart_peak = np.argmax(heart_psd)
@@ -432,7 +442,7 @@ def welchHR(interpolated_signal, time_domain, heart_range = (1, 6)):
 	p_max = heart_range[heart_peak]
 	ylims = (p_min -1, p_max +1)
 
-        freq_peaks, _ = find_peaks(p_final)
+	freq_peaks, _ = find_peaks(p_final)
 
 	#Peak prominence
 	freq_prominences = peak_prominences(p_final, freq_peaks)
@@ -440,7 +450,7 @@ def welchHR(interpolated_signal, time_domain, heart_range = (1, 6)):
 	
 	peaks_values = freqs[freq_peaks[prominent_peaks]]
 	prominent_values = p_final[freq_peaks[prominent_peaks]]
-#
+
 	#prominent_peaks2, _ = find_peaks(p_final, prominence=12)
 	#peaks_values2 = f[prominent_peaks2]
 	#prominent_values2 = p_final[prominent_peaks2]
@@ -448,6 +458,20 @@ def welchHR(interpolated_signal, time_domain, heart_range = (1, 6)):
 	bpm = freqs[heart_freq][heart_peak] * 60
 
 	return(bpm)
+
+#TODO
+#Wavelet Analysis
+#def waveletHR(normalised_interpolated_signal, time_domain, heart_range = (0.5, 6)):
+
+	#import pywt
+	#import pycwt as wavelet
+
+	#out_fig = out_dir + "/bpm_trace.detrended.png"
+	#plt.plot(time_domain, normalised_interpolated_signal)
+	#plt.savefig(out_fig)
+	#plt.close()
+
+#	return(bpm)
 
 #Calculate RMSSD
 #Root mean square of successive differences
@@ -1115,6 +1139,8 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		#(i.e. if p-value highly significant)
 #		if (np.float64(p_value) > np.float_power(10, -10)) or (mad < 0.02):
 		if (np.float64(p_value) > np.float_power(10, -8)) or (mad <= 0.02) or (np.absolute(slope) <= 0.002):
+			#detrend cubic spline interploated data
+			norm_cs = detrendSignal(cs,td)
 
 			#peak_times = times[peaks]
 
@@ -1131,7 +1157,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			plt.savefig(out_fig2)
 			plt.close()
 
-			bpm = "NA"
 
 			#Root mean square of successive differences
 			#first calculating each successive time difference between heartbeats in ms. Then, each of the values is squared and the result is averaged before the square root of the total is obtained
@@ -1155,9 +1180,13 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 			#Heart range in Hz
 			heart_range = (0.5, 6)
-			
+
 			#Perform Fourier Analysis 
-			psd, freqs, peak, bpm_fourier = fourierHR(cs, td, heart_range)
+			psd, freqs, peak, bpm_fourier = fourierHR(norm_cs, td, heart_range)
+			#psd, freqs, peak, bpm_fourier = fourierHR(cs, td, heart_range)
+		
+			#Round heart rate
+			bpm_fourier = np.around(bpm_fourier, decimals=2)
 
 			#Plot full. one-sided Fourier Transform 
 			ax = plotFourier(psd = psd, freqs = freqs, peak = None, bpm = bpm_fourier, heart_range = None, figure_loc = 211)
@@ -1167,116 +1196,76 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			ax = plotFourier(psd = psd, freqs = freqs, peak = peak, bpm = bpm_fourier, heart_range = heart_range, figure_loc = 212)
 
 			plt.xlabel('Frequency (Hz)')
-
 		
 			out_fourier = out_dir + "/bpm_power_spectra.fourier.png"
 			plt.savefig(out_fourier)#, bbox_inches='tight')
 			plt.close()
 
-
-			#fig, [ax1,ax2] = plt.subplots(nrows=2, ncols=1, figsize=(10, 10))
-
-			#TODO
-			#Wavelet Analysis
-			#import pywt
-#			import pycwt as wavelet
-#			dt = timestep		
-#			t = td
-#			p = np.polyfit(t - t[0], cs(td), 1)
-#			dat_notrend = cs(td) - np.polyval(p, td - td[0])
-#			std = dat_notrend.std()  # Standard deviation
-#			var = std ** 2  # Variance
-#			dat_norm = dat_notrend / std	
-
-#			out_fig = out_dir + "/bpm_trace.detrended.png"
-#			plt.plot(td, dat_norm)
-#			plt.savefig(out_fig)
-#			plt.close()
-	
 			#Welch's Method for spectral analysis
-			bpm_welch =  welchHR(interpolated_signal = cs, time_domain = td, heart_range = (1, 6))
+#			bpm_welch =  welchHR(interpolated_signal = cs, time_domain = td, heart_range = (1, 6))
+#			bpm_welch = np.around(bpm_welch, decimals=2)
+#			ax = plotFourier(psd = psd, freqs = freqs, peak = None, bpm = bpm_fourier, heart_range = None, figure_loc = 211)
 
-#			plt.semilogx(f, p_final)
-##			plt.semilogx(peaks_values, prominent_values, "x")
-#			plt.semilogx(peaks_values2, prominent_values2, "o")
-#			plt.show()
+#			if bpm_welch < 300 and bpm_welch > 60:
+#				bpm_label2 = "BPM = " +  str(int(bpm_welch))
+#			else:
+#				bpm_label2 = "BPM = " +  str(int(bpm_welch)) + " (unreliable)"	
 
+#			out_fig3 = out_dir + "/bpm_power_spectra.welch.png"
 
-			#calculate beats per min from frequency spectra	
-			bpm_welch = f[heart_freq][heart_peak] * 60
-
-			if bpm_welch < 300 and bpm_welch > 60:
-				bpm_label2 = "BPM = " +  str(int(bpm_welch))
-			else:
-				bpm_label2 = "BPM = " +  str(int(bpm_welch)) + " (unreliable)"	
-
-			out_fig3 = out_dir + "/bpm_power_spectra.welch.png"
-
-			fig, [ax1,ax2] = plt.subplots(nrows=2, ncols=1, figsize=(10, 10))
+#			fig, [ax1,ax2] = plt.subplots(nrows=2, ncols=1, figsize=(10, 10))
 			#Plot all power spectra
-			ax1.semilogx(f, p_final)
-			#ax1.semilogx(peaks_values, prominent_values, "x")
-			ax1.semilogx(peaks_values2, prominent_values2, "x")
-			ax1.set_ylabel('Power Spectrum (dB/Hz)')
+#			ax1.semilogx(f, p_final)
+			##ax1.semilogx(peaks_values, prominent_values, "x")
+#			ax1.semilogx(peaks_values2, prominent_values2, "x")
+#			ax1.set_ylabel('Power Spectrum (dB/Hz)')
 
-			ax2.plot(f, p_final)
-			ax2.plot(peaks_values2, prominent_values2, "x")
-#			ax2.plot(f[heart_freq][heart_peak], p_final[heart_freq][heart_peak], "x") #Peak
-			ax2.set_xlim((0.75, 6))
-			ax2.set_ylim(ylims)        
-			ax2.vlines(x=f[heart_freq][heart_peak], ymin=ylims[0], ymax=p_final[heart_freq][heart_peak], linestyles = "dashed")
-			ax2.hlines(y=p_final[heart_freq][heart_peak], xmin=0.75, xmax=f[heart_freq][heart_peak], linestyles = "dashed")
-			ax2.set_title(bpm_label2, loc='right')
+#			ax2.plot(f, p_final)
+#			ax2.plot(peaks_values2, prominent_values2, "x")
+##			ax2.plot(f[heart_freq][heart_peak], p_final[heart_freq][heart_peak], "x") #Peak
+#			ax2.set_xlim((0.75, 6))
+#			ax2.set_ylim(ylims)        
+#			ax2.vlines(x=f[heart_freq][heart_peak], ymin=ylims[0], ymax=p_final[heart_freq][heart_peak], linestyles = "dashed")
+#			ax2.hlines(y=p_final[heart_freq][heart_peak], xmin=0.75, xmax=f[heart_freq][heart_peak], linestyles = "dashed")
+#			ax2.set_title(bpm_label2, loc='right')
 
-			fig.suptitle("Power spectral density of HRV")
-			plt.xlabel('Frequency (Hz)')
-			plt.ylabel('Power Spectrum (dB/Hz)')
+#			fig.suptitle("Power spectral density of HRV")
+#			plt.xlabel('Frequency (Hz)')
+#			plt.ylabel('Power Spectrum (dB/Hz)')
 
-			plt.savefig(out_fig3)
-			plt.close()
+#			plt.savefig(out_fig3)
+#			plt.close()
 
-#			bpm = np.around(bpm, decimals=2)
-			bpm_welch = np.around(bpm_welch, decimals=2)
 			#Write bpm estimates to file
 			out_file = out_dir + "/heart_rate.txt"
 			with open(out_file, 'w') as output:
 	
-				output.write("well\twell_id\tbpm\tbpm_spectra\n")
-				output.write(well_number + "\t" + well + "\t" +  str(bpm) + "\t" + str(bpm_welch) + "\n")
-	
-			print("bpm_fourier", str(bpm_fourier))
-			print("bpm_welch", str(bpm_welch))
+				output.write("well\twell_id\tbpm\n")
+				output.write(well_number + "\t" + well + "\t" +  str(bpm_fourier) + "\t" + str(bpm_welch) + "\n")
 
-		else:
-			out_file = out_dir + "/heart_rate.txt"
+#		else:
+#			out_file = out_dir + "/heart_rate.txt"
 			#Write bpm to file
-			with open(out_file, 'w') as output:
+#			with open(out_file, 'w') as output:
 
-				output.write("well\twell_id\tbpm\tbpm_spectra\tnote\n")
-				output.write(well_number + "\t" + well + "\tNA\tNA\tfew_peaks\n")
-				#output.write("well\twell_id\tbpm\tbpm_spectra\n")
-				#output.write(well_number + "\t" + well + "\tNA\tNA\n")
-	else:
-		out_file = out_dir + "/heart_rate.txt"
+#				output.write("well\twell_id\tbpm\tnote\n")
+#				output.write(well_number + "\t" + well + "\tNA\tsignal_issue\n")
+#	else:
+#		out_file = out_dir + "/heart_rate.txt"
 		#Write bpm to file
-		with open(out_file, 'w') as output:
+#		with open(out_file, 'w') as output:
 
-			output.write("well\twell_id\tbpm\tbpm_spectra\tnote\n")
-			output.write(well_number + "\t" + well + "\tNA\tNA\tno_heart_roi\n")
-			#output.write("well\twell_id\tbpm\tbpm_spectra\n")
-			#output.write(well_number + "\t" + well + "\tNA\tNA\n")
+#			output.write("well\twell_id\tbpm\tnote\n")
+#			output.write(well_number + "\t" + well + "\tNA\tno_heart_roi\n")
 
 
-else:
-	out_file = out_dir + "/heart_rate.txt"
+#else:
+#	out_file = out_dir + "/heart_rate.txt"
 	#Write bpm to file
-	with open(out_file, 'w') as output:
+#	with open(out_file, 'w') as output:
 
-		output.write("well\twell_id\tbpm\tbpm_spectra\nnote\n")
-		output.write(well_number + "\t" + well + "\tNA\tNA\tempty_frames\n")
-		#output.write("well\twell_id\tbpm\tbpm_spectra\n")
-		#output.write(well_number + "\t" + well + "\tNA\tNA\n")
-
+#		output.write("well\twell_id\tbpm\tnote\n")
+#		output.write(well_number + "\t" + well + "\tNA\tempty_frames\n")
 
 #Welch’s method [R145] computes an estimate of the power spectral density by dividing the data into overlapping segments, computing a modified periodogram for each segment and averaging the periodograms.
 #https://docs.scipy.org/doc/scipy-0.14.0/reference/generated/scipy.signal.welch.html
