@@ -360,8 +360,7 @@ def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 6)):
 	peaks = peaks[psd[peaks] >= 0.75]
 
 	n_peaks = len(peaks)
-	if n_peaks > 1:
-
+	if n_peaks >= 1:
 		#Determine the peak within the heart range
 		max_peak = max(psd[peaks])
 
