@@ -316,9 +316,13 @@ def detrendSignal(interpolated_signal, time_domain):
 	std = dat_notrend.std()  # Standard deviation
 	var = std ** 2  # Variance
 
+	#Normalise Signal
 	normalised_signal = dat_notrend / std 
 
-	return(normalised_signal)
+	#Generate new Cubic Spline based on normalised data
+	norm_cs = CubicSpline(time_domain, normalised_signal)
+
+	return(norm_cs)
 
 #Perform a Fourier Transform on interpolated signal from heart region
 def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 6)):
@@ -346,41 +350,51 @@ def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 6)):
 	freqs = freqs[freqs > 0]
 
 	#Calculate ylims for xrange 0.5 to 6 Hz
-	heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))
-	heart_psd = psd[heart_indices]
-	heart_freqs = freqs[heart_indices]
+	heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))[0]
 
 	#Peak Calling on Fourier Transform data
 	peaks, _ = find_peaks(psd)
-	heart_peaks, _ = find_peaks(heart_psd)
 
 	#Filter out peaks lower than 1
-	heart_peaks = heart_peaks[heart_psd[heart_peaks] >= 1]
+#	peaks = peaks[psd[peaks] >= 1]
+	peaks = peaks[psd[peaks] >= 0.75]
 
-	n_peaks = len(heart_peaks)
+	n_peaks = len(peaks)
 	if n_peaks > 1:
 
 		#Determine the peak within the heart range
-		max_peak = max(heart_psd[heart_peaks])
+		max_peak = max(psd[peaks])
 
 		#Filter peaks based on ratio to largest peak
-		filtered_peaks = heart_peaks[heart_psd[heart_peaks] >= (max_peak * 0.25)]
+		filtered_peaks = peaks[psd[peaks] >= (max_peak * 0.25)]
 
 		#Calculate heart rate in beats per minute (bpm) from the results of the Fourier Analysis
 		n_filtered = len(filtered_peaks)
-#		if n_filtered > 0:
-		if 0 < n_filtered < 4:
-			beat_freq = heart_freqs[filtered_peaks[0]]
-			beat_power = heart_psd[filtered_peaks[0]]
+		if n_filtered > 0:
 
-			bpm = beat_freq * 60 
-			peak_coord  = (beat_freq, beat_power)
+			beat_indices = list(set(filtered_peaks) & set(heart_indices))
+			beat_psd = psd[beat_indices]
+			beat_freqs = freqs[beat_indices]
 
-#		elif  0 < n_filtered < 4:
+			if 0 < len(beat_indices) < 4:
+				beat_freq = beat_freqs[0] 
+				beat_power = beat_psd[0]
 
+				bpm = beat_freq * 60 
+				peak_coord  = (beat_freq, beat_power)
+
+			else:
+				bpm = None
+				peak_coord = None
+				
 		else:
-			bpm = "NA"			
+			bpm = None
 			peak_coord = None
+
+	#Flat Fourier
+	else:
+		bpm = None
+		peak_coord = None
 
 	return(psd, freqs, peak_coord, bpm)
 
@@ -388,10 +402,10 @@ def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 6)):
 def plotFourier(psd, freqs, peak, bpm, heart_range, figure_loc = 211):
 
 	#Prepare label for plot
-	try:
+	if bpm is not None:
 		bpm_label = "Heart rate = " + str(int(bpm)) + " bpm"
-	except ValueError:
-		bpm_label = "Heart rate = " + str(bpm)
+	else:
+		bpm_label = "Heart rate = NA"
 
 	ax = plt.subplot(figure_loc)
  
@@ -406,13 +420,13 @@ def plotFourier(psd, freqs, peak, bpm, heart_range, figure_loc = 211):
 		_ = ax.vlines(x = peak[0], ymin = 0, ymax = peak[1], linestyles = "dashed")
 		_ = ax.hlines(y = peak[1], xmin = 0, xmax = peak[0], linestyles = "dashed")
 		#Annotate with BPM
-		_ = ax.annotate(bpm_label, xy=peak, xytext=(peak[0] + 0.5 , peak[1] + 1),arrowprops=dict(facecolor='black', shrink=0.05))
+		_ = ax.annotate(bpm_label, xy=peak, xytext=(peak[0] + 0.5 , peak[1] + (peak[1] * 0.05)), arrowprops=dict(facecolor='black', shrink=0.05))
 
 	# Only plot within heart range (in Hertz) if necessary
 	if heart_range is not None:
 		_ = ax.set_xlim(heart_range)
 
-	_ = ax.set_ylim(top = max(psd) + 8)
+	_ = ax.set_ylim(top = max(psd) + (max(psd) * 0.2))
 
 	#Y-axis label
 	_ = ax.set_ylabel('Power Spectra')
@@ -431,7 +445,7 @@ def welchHR(interpolated_signal, time_domain, heart_range = (1, 6)):
 	p_final = 10*np.log10(p_density)
 
 	#Calculate ylims for xrange 1 to 6 Hz
-        heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))
+	heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))
 	heart_freqs = freqs[heart_indices]
 	heart_psd = p_final[heart_indices]
 
@@ -903,9 +917,11 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		#Ration of width to height
 		aspect_ratio = float(width) / float(height)
 
+		#TODO
 		#Take all regions that overlap with the the >=20% of the N most changeable pixels
-		if overlap_pixels >= (top_pixels * 0.2):
+#		if overlap_pixels >= (top_pixels * 0.2):
 #		if overlap_pixels >= (top_pixels * 0.25):
+		if overlap_pixels >= (top_pixels * 0.4):
 
 			mask_contours.append(test_contour)
 			final_mask = cv2.add(final_mask, contour_mask)
@@ -1098,95 +1114,59 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		#Calculate slope
 		#Presumably should be flat(ish) if good
 		#Or fit line
-
 		slope, intercept, r_value, p_value, std_err = stats.linregress(times, y_final)
 
 		mad = stats.median_absolute_deviation(y_final)
 
-		#Find peaks in heart ROI signal, peaks only those above the mean stdev
-		#Minimum distance of 2 between peaks
-		peaks, _ = find_peaks(y_final, height = meanY)
+#		if np.float64(p_value) < np.float_power(10, -8):
+#			sig = "sig"
+#		else:
+#			sig = "no"
 
+#		out_file = out_dir + "/signal.stats.txt"
+#		with open(out_file, 'w') as output:
+
+#			output.write("well\tmad\tslope\tp_value\tr_value\n")
+#			output.write(well_number + "\t" + str(mad) + "\t" + str(slope) + "\t" + str(p_value) + "\t" + str(r_value) + "\t" + sig + "\n")
+
+		#prominent_peaks = [idx for idx, prominence in enumerate(prominences[0]) if prominence > 0.2]
+
+		#Peak Calling
+		peaks, _ = find_peaks(cs(td), height = np.mean(cs(td)))
 		#Peak prominence
-		prominences = peak_prominences(y_final, peaks)
+#		prominences = peak_prominences(cs(td), peaks)
+#		prominent_peaks = [idx for idx, prominence in enumerate(prominences[0])]
 
-		if np.float64(p_value) < np.float_power(10, -8):
-			sig = "sig"
-		else:
-			sig = "no"
 
-		out_file = out_dir + "/signal.stats.txt"
-		with open(out_file, 'w') as output:
-
-			output.write("well\tmad\tslope\tp_value\tr_value\n")
-			output.write(well_number + "\t" + str(mad) + "\t" + str(slope) + "\t" + str(p_value) + "\t" + str(r_value) + "\t" + sig + "\n")
-
-		out_fig = out_dir + "/bpm_prominences.png"
-		contour_heights = y[peaks] - prominences
-		plt.plot(y_final)
-		plt.plot(peaks, y_final[peaks], "x")
-		plt.ylabel('Heart ROI intensity (CoV)')
-		plt.vlines(x=peaks, ymin=contour_heights, ymax=y_final[peaks])
-		plt.hlines(y = meanY, xmin = 0, xmax = len(y_final), linestyles = "dashed")
-
+		out_fig = out_dir + "/bpm_trace.png"
+		plt.plot(td, cs(td))
+		plt.plot(td[peaks], cs(td)[peaks], "x")
+		plt.ylabel('Heart intensity (CoV)')
+		plt.xlabel('Time [sec]')
+		plt.hlines(y = np.mean(cs(td)), xmin = td[0], xmax = td[-1], linestyles = "dashed")
 		plt.savefig(out_fig,bbox_inches='tight')
 		plt.close()
 
-#		prominent_peaks = [idx for idx, prominence in enumerate(prominences[0]) if prominence > 0.2] 
-		prominent_peaks = [idx for idx, prominence in enumerate(prominences[0])]
-
 		#Filter out if linear regression captures signal trend well
 		#(i.e. if p-value highly significant)
-#		if (np.float64(p_value) > np.float_power(10, -10)) or (mad < 0.02):
 		if (np.float64(p_value) > np.float_power(10, -8)) or (mad <= 0.02) or (np.absolute(slope) <= 0.002):
-			#detrend cubic spline interploated data
-			norm_cs = detrendSignal(cs,td)
 
-			#peak_times = times[peaks]
-
-			peak_times = times[peaks[prominent_peaks]]
-			peak_signal = y_final[peaks[prominent_peaks]]
-
-			out_fig2 = out_dir + "/bpm_trace.peaks.png"
-
-			plt.plot(times, y)
-			plt.plot(peak_times, peak_signal, "x")
-			plt.ylabel('Heart ROI intensity (CoV)')
-			plt.xlabel('Time [sec]')
-			plt.hlines(y = meanY, xmin = times[0], xmax = times[-1], linestyles = "dashed")
-			plt.savefig(out_fig2)
-			plt.close()
-
+			#Detrend and normalise cubic spline interpolated data
+#			norm_cs = detrendSignal(cs,td)
 
 			#Root mean square of successive differences
 			#first calculating each successive time difference between heartbeats in ms. Then, each of the values is squared and the result is averaged before the square root of the total is obtained
-
 #			rmssd = getRMSSD(peak_times)
-
-			#Calculate beat-to-beat times
-			#(time between peaks)
-#			peak2peak = [t2 - t1 for t1, t2 in zip(peak_times, peak_times[1:])]
-
-			#Square peak2peak
-#			peak2peak_sq = [i**2 for i in peak2peak]
-
-			#Average squared peak2peak
-#			mean_peak2peak_sq = np.mean(peak2peak_sq)
-
-			#Square root of Average squared peak2peak
-#			rmssd = np.sqrt(mean_peak2peak_sq)
-
-			#for R–R interval time series 
 
 			#Heart range in Hz
 			heart_range = (0.5, 6)
 
 			#Perform Fourier Analysis 
-			psd, freqs, peak, bpm_fourier = fourierHR(norm_cs, td, heart_range)
-			#psd, freqs, peak, bpm_fourier = fourierHR(cs, td, heart_range)
-		
-			#Round heart rate
-			bpm_fourier = np.around(bpm_fourier, decimals=2)
+			psd, freqs, peak, bpm_fourier = fourierHR(cs, td, heart_range)
+	
+			if bpm_fourier is not None:	
+				#Round heart rate
+				bpm_fourier = np.around(bpm_fourier, decimals=2)
 
 			#Plot full. one-sided Fourier Transform 
 			ax = plotFourier(psd = psd, freqs = freqs, peak = None, bpm = bpm_fourier, heart_range = None, figure_loc = 211)
@@ -1194,7 +1174,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 			#Plot one-sided Fourier within specified range
 			ax = plotFourier(psd = psd, freqs = freqs, peak = peak, bpm = bpm_fourier, heart_range = heart_range, figure_loc = 212)
-
 			plt.xlabel('Frequency (Hz)')
 		
 			out_fourier = out_dir + "/bpm_power_spectra.fourier.png"
@@ -1241,7 +1220,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			with open(out_file, 'w') as output:
 	
 				output.write("well\twell_id\tbpm\n")
-				output.write(well_number + "\t" + well + "\t" +  str(bpm_fourier) + "\t" + str(bpm_welch) + "\n")
+				output.write(well_number + "\t" + well + "\t" +  str(bpm_fourier) + "\n")
 
 #		else:
 #			out_file = out_dir + "/heart_rate.txt"
