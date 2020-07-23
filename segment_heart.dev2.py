@@ -104,6 +104,9 @@ def normVideo(frames):
 
 		if frame is not None:
 
+			#Convert RGB to greyscale
+			frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
 			if i == 0:
 				filtered_frames = np.asarray(frame)
 			else:
@@ -116,7 +119,14 @@ def normVideo(frames):
 		frame = frames[i]
 
 		if frame is not None:
+
+			#Convert RGB to greyscale
+			frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
 			norm_frame = np.uint8(frame / np.max(filtered_frames) * 255)
+
+			#Convert scaled greyscale back to RGB
+			norm_frame = cv2.cvtColor(norm_frame, cv2.COLOR_GRAY2BGR)
 
 		#If empty frame
 		else:
@@ -156,18 +166,23 @@ def processFrame(frame):
 	limg = cv2.merge((cl,a,b))
 
 	#Convert LAB back to RGB colour 
-	out_frame = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+#	out_frame = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
 
 	#Convert to greyscale
-	frame_grey = cv2.cvtColor(out_frame, cv2.COLOR_BGR2GRAY)
-#	frame_grey = cl 
+#	frame_grey = cv2.cvtColor(out_frame, cv2.COLOR_BGR2GRAY)
+	frame_grey = cl 
 
 	#Convert CLAHE-normalised greyscale frame back to BGR
 	out_frame = cv2.cvtColor(frame_grey, cv2.COLOR_GRAY2BGR)
 
 	#Blur the CLAHE frame
 	#Blurring kernel numbers must be odd integers
-	blurred_frame = cv2.GaussianBlur(frame_grey, (9, 9), 0) 
+	blurred_frame = cv2.GaussianBlur(frame_grey, (9, 9), 0)
+
+	#
+	#sigma_est = estimate_sigma(img_as_float(blurred_frame), multichannel=False, average_sigmas=True)
+
+	#blurred_frame = img_as_ubyte(blurred_frame)
 
 	return out_frame, frame_grey, blurred_frame
  
@@ -213,7 +228,7 @@ def filterMask(mask, min_area = 300):
 def diffFrame(frame, frame2_blur, frame1_blur, min_area = 300):
 	"""Calculate the abs diff between 2 frames and returns frame2 masked with the filtered differences."""
 
-	#Absolute differnce between frames
+	#Absolute difference between frames
 	abs_diff = cv2.absdiff(frame2_blur, frame1_blur)
 
 	#Triangle thresholding on differences
@@ -299,12 +314,13 @@ def rolling_diff(index, frames, win_size = 5, direction = "forward", min_area = 
 	thresh = cv2.morphologyEx(abs_diffs, cv2.MORPH_OPEN, kernel)
 
 	#Filter based on their area
+	#thresh = filterMask(mask = thresh, min_area = min_area)
 	thresh = filterMask(mask = thresh, min_area = min_area)
 
 	#Mask frame
 	masked_frame = maskFrame(frame, thresh)
 
-	return(masked_frame,abs_diffs)
+	return(masked_frame, abs_diffs)
 
 #Detrend heart signal and normalise
 def detrendSignal(interpolated_signal, time_domain):
@@ -360,7 +376,7 @@ def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 6)):
 	peaks = peaks[psd[peaks] >= 0.75]
 
 	n_peaks = len(peaks)
-	if n_peaks >= 1:
+	if n_peaks > 0:
 		#Determine the peak within the heart range
 		max_peak = max(psd[peaks])
 
@@ -825,6 +841,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 	#Get indices of N most changeable pixels
 	top_pixels = 250
+	top_pixels = 350
 	changeable_pixels = np.unravel_index(np.argsort(heart_roi.ravel())[-top_pixels:], heart_roi.shape)
 
 	#Create boolean matrix the same size as the RoI image
@@ -842,10 +859,17 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	heart_roi_clean = heart_roi > yen
 	heart_roi_clean = heart_roi_clean.astype(np.uint8)
 
+#	plt.imshow(label_maxima)
+#	plt.show()
 	#Filter mask based on area of contours
-	#heart_roi_clean = filterMask(mask = heart_roi_clean, min_area = 500)
 	#heart_roi_clean = filterMask(mask = heart_roi_clean, min_area = 300)
-	heart_roi_clean = filterMask(mask = heart_roi_clean, min_area = 150)
+	#heart_roi_clean = filterMask(mask = heart_roi_clean, min_area = 150)
+	heart_roi_clean = filterMask(mask = heart_roi_clean, min_area = 100)
+
+#	plt.imshow(heart_roi_clean)
+#	plt.show()
+
+	#Filter mask based on area of contours
 
 	#Scikit image to opencv
 	#cv_image = img_as_ubyte(any_skimage_image)
@@ -858,6 +882,15 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	rows, cols = heart_roi_clean.shape
 
 	out_fig = out_dir + "/embryo.frame_diff.png"
+#	fig, ax = plt.subplots(2, 2,figsize=(15, 15))
+	#Heart Roi First  frame
+#	ax[0, 0].imshow(f0_grey,cmap='gray')
+#	ax[0, 0].set_title('Embryo',fontsize=10)
+#	ax[0, 0].axis('off')
+	#Summed Absolute Difference
+#	ax[1, 0].imshow(heart_roi)
+#	ax[1, 0].set_title('Summed Absolute\nDifferences', fontsize=10)
+#	ax[1, 0].axis('off')
 	plt.imshow(heart_roi)
 	plt.savefig(out_fig,bbox_inches='tight')
 	plt.close()
@@ -886,11 +919,15 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		overlap = np.logical_and(maxima, contour_mask)
 		overlap_pixels = overlap.sum()
 
+#		print(overlap_pixels)
+
 		#Calculate ratio between area of intersection and contour area 
 		pixel_ratio = overlap_pixels / contour_pixels
 #		print("contour pixels", contour_pixels)
 #		print("overlap pixels", overlap_pixels)
 #		print("pixel ratio", pixel_ratio)
+
+#		print(pixel_ratio)
 
 		contour_area =  cv2.contourArea(test_contour)
 		
@@ -916,11 +953,10 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		#Ration of width to height
 		aspect_ratio = float(width) / float(height)
 
-		#TODO
 		#Take all regions that overlap with the the >=20% of the N most changeable pixels
 #		if overlap_pixels >= (top_pixels * 0.2):
 #		if overlap_pixels >= (top_pixels * 0.25):
-		if overlap_pixels >= (top_pixels * 0.4):
+		if (overlap_pixels >= (top_pixels * 0.7)) or (pixel_ratio >= 0.1):
 
 			mask_contours.append(test_contour)
 			final_mask = cv2.add(final_mask, contour_mask)
@@ -964,8 +1000,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		plt.savefig(out_fig,bbox_inches='tight')
 		plt.close()
 
-		#Signal standard deviation
-		#stds = {}
 		#Coefficient of variation
 		cvs = {}
 		times = []
@@ -978,7 +1012,8 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			raw_frame = sorted_frames[i]
 			frame = embryo[i]
 
-			if raw_frame is not None:
+			if frame is not None:
+
 				masked_data = cv2.bitwise_and(raw_frame, raw_frame, mask=mask)
 				masked_grey = cv2.cvtColor(masked_data, cv2.COLOR_BGR2GRAY)
 
@@ -994,8 +1029,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 				heart_std = np.std(heart_values)
 				#Coefficient of variation
 				heart_cv =  heart_std / heart_mean
-
-#				cropped_frame = masked_data.copy()[y2 : y2 + h2, x2 : x2 + w2]
 
 				# split source frame into B,G,R channels
 				b,g,r = cv2.split(frame)
@@ -1151,7 +1184,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		if (np.float64(p_value) > np.float_power(10, -8)) or (mad <= 0.02) or (np.absolute(slope) <= 0.002):
 
 			#Detrend and normalise cubic spline interpolated data
-#			norm_cs = detrendSignal(cs,td)
+			norm_cs = detrendSignal(cs,td)
 
 			#Root mean square of successive differences
 			#first calculating each successive time difference between heartbeats in ms. Then, each of the values is squared and the result is averaged before the square root of the total is obtained
@@ -1179,41 +1212,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			plt.savefig(out_fourier)#, bbox_inches='tight')
 			plt.close()
 
-			#Welch's Method for spectral analysis
-#			bpm_welch =  welchHR(interpolated_signal = cs, time_domain = td, heart_range = (1, 6))
-#			bpm_welch = np.around(bpm_welch, decimals=2)
-#			ax = plotFourier(psd = psd, freqs = freqs, peak = None, bpm = bpm_fourier, heart_range = None, figure_loc = 211)
-
-#			if bpm_welch < 300 and bpm_welch > 60:
-#				bpm_label2 = "BPM = " +  str(int(bpm_welch))
-#			else:
-#				bpm_label2 = "BPM = " +  str(int(bpm_welch)) + " (unreliable)"	
-
-#			out_fig3 = out_dir + "/bpm_power_spectra.welch.png"
-
-#			fig, [ax1,ax2] = plt.subplots(nrows=2, ncols=1, figsize=(10, 10))
-			#Plot all power spectra
-#			ax1.semilogx(f, p_final)
-			##ax1.semilogx(peaks_values, prominent_values, "x")
-#			ax1.semilogx(peaks_values2, prominent_values2, "x")
-#			ax1.set_ylabel('Power Spectrum (dB/Hz)')
-
-#			ax2.plot(f, p_final)
-#			ax2.plot(peaks_values2, prominent_values2, "x")
-##			ax2.plot(f[heart_freq][heart_peak], p_final[heart_freq][heart_peak], "x") #Peak
-#			ax2.set_xlim((0.75, 6))
-#			ax2.set_ylim(ylims)        
-#			ax2.vlines(x=f[heart_freq][heart_peak], ymin=ylims[0], ymax=p_final[heart_freq][heart_peak], linestyles = "dashed")
-#			ax2.hlines(y=p_final[heart_freq][heart_peak], xmin=0.75, xmax=f[heart_freq][heart_peak], linestyles = "dashed")
-#			ax2.set_title(bpm_label2, loc='right')
-
-#			fig.suptitle("Power spectral density of HRV")
-#			plt.xlabel('Frequency (Hz)')
-#			plt.ylabel('Power Spectrum (dB/Hz)')
-
-#			plt.savefig(out_fig3)
-#			plt.close()
-
 			#Write bpm estimates to file
 			out_file = out_dir + "/heart_rate.txt"
 			with open(out_file, 'w') as output:
@@ -1228,22 +1226,22 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 #				output.write("well\twell_id\tbpm\tnote\n")
 #				output.write(well_number + "\t" + well + "\tNA\tsignal_issue\n")
-#	else:
-#		out_file = out_dir + "/heart_rate.txt"
+	else:
+		out_file = out_dir + "/heart_rate.txt"
 		#Write bpm to file
-#		with open(out_file, 'w') as output:
+		with open(out_file, 'w') as output:
 
-#			output.write("well\twell_id\tbpm\tnote\n")
-#			output.write(well_number + "\t" + well + "\tNA\tno_heart_roi\n")
+			output.write("well\twell_id\tbpm\tnote\n")
+			output.write(well_number + "\t" + well + "\tNA\tno_heart_roi\n")
 
 
-#else:
-#	out_file = out_dir + "/heart_rate.txt"
+else:
+	out_file = out_dir + "/heart_rate.txt"
 	#Write bpm to file
-#	with open(out_file, 'w') as output:
+	with open(out_file, 'w') as output:
 
-#		output.write("well\twell_id\tbpm\tnote\n")
-#		output.write(well_number + "\t" + well + "\tNA\tempty_frames\n")
+		output.write("well\twell_id\tbpm\tnote\n")
+		output.write(well_number + "\t" + well + "\tNA\tempty_frames\n")
 
 #Welch’s method [R145] computes an estimate of the power spectral density by dividing the data into overlapping segments, computing a modified periodogram for each segment and averaging the periodograms.
 #https://docs.scipy.org/doc/scipy-0.14.0/reference/generated/scipy.signal.welch.html
