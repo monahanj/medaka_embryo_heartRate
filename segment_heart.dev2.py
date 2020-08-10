@@ -19,7 +19,7 @@ from skimage import color
 import scipy
 from scipy import stats
 from scipy import ndimage as ndi
-from scipy.signal import find_peaks, peak_prominences, welch
+from scipy.signal import find_peaks, peak_prominences, welch, savgol_filter
 from scipy.interpolate import CubicSpline
 
 import matplotlib
@@ -72,17 +72,24 @@ if args.loop:
 
 	#If tiff
 	if frame_format == "tiff":
-		well_frames = glob2.glob(indir + '/*/' + well_number + '*' + loop + '*.tif') + glob2.glob(indir + '/*/' + well_number + '*' + loop + '*.tiff')
+
+		well_frames = glob2.glob(indir + '/*Tif*/*' + well_number + '*.tif') + glob2.glob(indir + '/*Tif*/*' + well_number + '*.tiff')
+		well_frames = [fname for fname in well_frames if loop in fname]
+
 	#If jpeg
 	elif frame_format == "jpeg":
-		well_frames = glob2.glob(indir + '/*/' + well_number + '*' + loop + '*.jpg') + glob2.glob(indir + '/*/' + well_number + '*' + loop + '*.jpeg')   
+		
+		well_frames = glob2.glob(indir + '/*Jpeg*/*' + well_number + '*.jpeg') + glob2.glob(indir + '/*Jpeg*/*' + well_number + '*.jpg')
+		well_frames = [fname for fname in well_frames if loop in fname]
+
 else:
 	#If tiff
 	if frame_format == "tiff":
-		well_frames = glob2.glob(indir + '/*/*' + well_number + '*.tif') + glob2.glob(indir + '/*/*' + well_number + '*.tiff')
+		well_frames = glob2.glob(indir + '/*Tif*/*' + well_number + '*.tif') + glob2.glob(indir + '/*/*' + well_number + '*.tiff')
+
 	#If jpeg
 	elif frame_format == "jpeg":
-		well_frames = glob2.glob(indir + '/*/*' + well_number + '*.jpg') + glob2.glob(indir + '/*/*' + well_number + '*.jpeg')   
+		well_frames = glob2.glob(indir + '/*Jpeg*/*' + well_number + '*.jpg') + glob2.glob(indir + '/*Jpeg*/*' + well_number + '*.jpeg')   
 
 # Improve contrast with CLAHE (Contrast Limited Adaptive Histogram Equalization)
 #https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/py_histogram_equalization.html#histogram-equalization
@@ -178,11 +185,6 @@ def processFrame(frame):
 	#Blur the CLAHE frame
 	#Blurring kernel numbers must be odd integers
 	blurred_frame = cv2.GaussianBlur(frame_grey, (9, 9), 0)
-
-	#
-	#sigma_est = estimate_sigma(img_as_float(blurred_frame), multichannel=False, average_sigmas=True)
-
-	#blurred_frame = img_as_ubyte(blurred_frame)
 
 	return out_frame, frame_grey, blurred_frame
  
@@ -322,23 +324,89 @@ def rolling_diff(index, frames, win_size = 5, direction = "forward", min_area = 
 
 	return(masked_frame, abs_diffs)
 
-#Detrend heart signal and normalise
-def detrendSignal(interpolated_signal, time_domain):
+#Detrend heart signal and smoothe
+def detrendSignal(interpolated_signal, time_domain, window_size = 33):
+	
+	"""
+	Use Savitzky–Golay convolution filter to smoothe time-series data.
+	Fits successive sub-sets of adjacent data points with a low-degree polynomial using linear least squares.
+	Increases the precision of the data without distorting the signal tendency.
+	* interpolated_signal
+		Interpolated raw signal intensities. 
+	* time_domain 
+		Time domain generated from data interpolation.
+	* window_size INT
+		Odd number specifying window size for Savitzky–Golay filter.
+	"""
+	#Savitzky–Golay filter to smooth signal
+	#Window size must be odd integer
+	data_detrended = savgol_filter(interpolated_signal(time_domain), window_size, 3)
+#	data_detrended = savgol_filter(interpolated_signal(time_domain), 29, 3)
 
-	p = np.polyfit(time_domain - time_domain[0], interpolated_signal(time_domain), 1)
+#	p = np.polyfit(time_domain - time_domain[0], interpolated_signal(time_domain), 1)
 
-	dat_notrend = interpolated_signal(time_domain) - np.polyval(p, time_domain - time_domain[0])
+#	dat_notrend = interpolated_signal(time_domain) - np.polyval(p, time_domain - time_domain[0])
 
-	std = dat_notrend.std()  # Standard deviation
-	var = std ** 2  # Variance
+#	std = dat_notrend.std()  # Standard deviation
+#	var = std ** 2  # Variance
 
 	#Normalise Signal
-	normalised_signal = dat_notrend / std 
+#	normalised_signal = dat_notrend / std 
 
-	#Generate new Cubic Spline based on normalised data
-	norm_cs = CubicSpline(time_domain, normalised_signal)
+	#Generate new Cubic Spline based on smoothed data
+	norm_cs = CubicSpline(time_domain, data_detrended)
 
 	return(norm_cs)
+
+#Calculate Median Absolute Deviation 
+#for a given numeric vector
+def MAD(numeric_vector):
+
+	median = np.median(numeric_vector)
+	diff = abs(numeric_vector - median)
+	med_abs_deviation = np.median(diff)
+
+	return med_abs_deviation
+
+# Forward or reverse rolling window W with step size Ws
+def rolling_window(signal, win_size = 20, win_step = 5, direction = "forward"):
+	"""
+	Implement rlling window over Nanopore read signal intensities (mean or median)
+	* signal FLOAT
+		 numeric vector
+	* win_size INT
+		Window size (default = 20)
+	* win_step INT
+		Window step size (default = 5)
+	* direction STR
+		Direction of rolling window: forward = start to end /low to high indices, reverse = end to start/ high to low indices
+	"""
+
+	n_signal = len(signal)
+	n_windows_signal = ((n_signal-win_size)//win_step)+1
+	windows = np.empty(dtype=signal.dtype, shape=n_windows_signal)
+	window_indices = []
+
+
+	# Iterate window by window over the signal array and compute the median/mean for each
+	for i, j in enumerate (np.arange (0, n_signal-win_size+1, win_step)):
+
+		#evaluate string in smooth as numpy function (median or mean)
+		if direction == "forward":
+			index = j
+			indices = list(range(index, index + win_size))
+			window_indices.append(indices)
+			#windows[i] = getattr(np,func)(signal[index : index + win_size])
+			windows[i] = MAD(signal[index : index + win_size])
+
+		elif direction == "reverse":
+			index = n_signal -j
+			indices = list(range(index -win_size, index))[::-1]
+			window_indices.append(indices)
+			#windows[i] = getattr(np,func)(signal[index -win_size : index][::-1])
+			windows[i] = MAD(signal[index -win_size : index][::-1])
+
+	return(windows, window_indices)
 
 #Perform a Fourier Transform on interpolated signal from heart region
 def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 6)):
@@ -369,11 +437,15 @@ def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 6)):
 	heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))[0]
 
 	#Peak Calling on Fourier Transform data
-	peaks, _ = find_peaks(psd)
+	#peaks, _ = find_peaks(psd)
+	peaks, _ = find_peaks(psd, prominence = 1, distance = 5)
 
 	#Filter out peaks lower than 1
-#	peaks = peaks[psd[peaks] >= 1]
-	peaks = peaks[psd[peaks] >= 0.75]
+##	peaks = peaks[psd[peaks] >= 1]
+##	peaks = peaks[psd[peaks] >= 0.75] #for interpolated
+##	peaks = peaks[psd[peaks] >= 15000] #for detrended and interpolated
+#	peaks = peaks[psd[peaks] >= 20000] #for detrended and interpolated
+	peaks = peaks[psd[peaks] >= 10000] #for detrended and interpolated
 
 	n_peaks = len(peaks)
 	if n_peaks > 0:
@@ -381,23 +453,49 @@ def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 6)):
 		max_peak = max(psd[peaks])
 
 		#Filter peaks based on ratio to largest peak
+		#filtered_peaks = peaks[psd[peaks] >= (max_peak * 0.33)]
 		filtered_peaks = peaks[psd[peaks] >= (max_peak * 0.25)]
 
 		#Calculate heart rate in beats per minute (bpm) from the results of the Fourier Analysis
 		n_filtered = len(filtered_peaks)
 		if n_filtered > 0:
 
+			#Find overlap and sort
 			beat_indices = list(set(filtered_peaks) & set(heart_indices))
+			beat_indices.sort() 
+
+
 			beat_psd = psd[beat_indices]
 			beat_freqs = freqs[beat_indices]
 
-			if 0 < len(beat_indices) < 4:
+			#If only one peak
+			if len(beat_indices) == 1:
 				beat_freq = beat_freqs[0] 
 				beat_power = beat_psd[0]
 
 				bpm = beat_freq * 60 
 				peak_coord  = (beat_freq, beat_power)
 
+			#If 4 peaks or less, take the first one 
+			if len(beat_indices) < 5:
+				beat_freq = beat_freqs[0]
+				beat_power = beat_psd[0]
+
+				bpm = beat_freq * 60
+				peak_coord  = (beat_freq, beat_power)
+
+				#Check if any peaks multiples of eachother
+				#Round if is necessary
+#				print(beat_freqs)
+
+			#if 0 < len(beat_indices) < 4:
+			#	beat_freq = beat_freqs[0]
+			#	beat_power = beat_psd[0]
+
+			#	bpm = beat_freq * 60
+			#	peak_coord  = (beat_freq, beat_power)
+
+			#Else too many to be confident
 			else:
 				bpm = None
 				peak_coord = None
@@ -410,6 +508,7 @@ def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 6)):
 	else:
 		bpm = None
 		peak_coord = None
+
 
 	return(psd, freqs, peak_coord, bpm)
 
@@ -544,9 +643,23 @@ for frame in well_frames:
 
 	fname = os.path.basename(frame)
 	fname = fname.split(".")[0]
-	fname = fname.split("---")
-	well = fname[0]
-	frame_details = fname[1].split("--")
+
+	#Well name first part of filename
+	if fname.startswith("WE"):
+
+		fname = fname.split("---")
+		well = fname[0]
+	
+		frame_details = fname[1].split("--")
+
+	#Well can be last field either
+	else:
+		#Strip "-"
+		fname = fname.lstrip("-")
+		fname = fname.split("--")
+		well = fname[-1]
+
+		frame_details = fname[:-1]
 
 	plate_pos = frame_details[0]
 	loop = frame_details[2]
@@ -556,6 +669,9 @@ for frame in well_frames:
 		#Tiff names....
 		#Extract info from tiff file names and create a pandas df
 		#WE00048---D001--PO01--LO002--CO6--SL037--PX32500--PW0080--IN0010--TM280--X014463--Y038077--Z223252--T0016746390.tif
+		#Or
+		#-H012--PO01--LO001--CO1--SL300--PX32500--PW0100--IN0010--TM280--X113600--Y074400--Z215806--T0001349296--WE00085.tif
+
 		frame_number = frame_details[4]
 		time = frame_details[-1]
 		#Drop 'T' from time stamp
@@ -566,6 +682,7 @@ for frame in well_frames:
 		#Jpeg names....
 		#Extract info from the file names and create a pandas df
 		#WE00001---A001--PO01--LO001--CO6--SL049_00.01.00_00.00.03,692.jpg
+	
 		frame_number_time = frame_details[-1]
 		frame_number = frame_number_time.split("_")[0]
 
@@ -603,7 +720,10 @@ for frame in well_frames:
 		img_grey = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
 		img_blur = cv2.GaussianBlur(img_grey, (3, 3), 0)
 
-		circles = cv2.HoughCircles(img_blur,cv2.HOUGH_GRADIENT,1,150,param1=50,param2=30)
+
+		#list = numpy.array(list, dtype=numpy.float64)
+
+		circles = cv2.HoughCircles(img_blur, cv2.HOUGH_GRADIENT, 1, 150, param1=50, param2=30)
 
 		if circles is not None:
 
@@ -899,6 +1019,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	final_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
 	img = np.zeros(shape=[rows, cols], dtype=np.uint8)
 	mask_contours = []
+	regions = 0
 	for i in range(len(contours)):
 
 		#Contour to test
@@ -960,6 +1081,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 			mask_contours.append(test_contour)
 			final_mask = cv2.add(final_mask, contour_mask)
+			regions += 1
 
 		#Compare ratio of areas for contour to rectangle
 		#Determines how much the contoured area fills the parallelogram
@@ -970,8 +1092,13 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 #			mask_contours.append(test_contour)	
 #			final_mask = cv2.add(final_mask, contour_mask)
 
+	#Filter on relative distance between heart subregions?
+	#Fit a centroid?
+
 	#Check if heart region was detected, i.e. if sum(masked) > 0
-	if final_mask.sum() > 0:  
+	#and limit number of possible heart regions to 3 or fewer
+	if (final_mask.sum() > 0) and (regions <= 3):  
+
 		mask = final_mask
 		#Overlay points on RoI
 		overlay = color.label2rgb(label_maxima, image = mask, alpha=0.7, bg_label=0, bg_color=None, colors=[(1, 0, 0)])
@@ -1112,11 +1239,14 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 		#No filtering needed for interpolation if no empty frames
 		if len(empty_frames) == 0:
+
 			y_final = y.copy()
-			cs = CubicSpline(times, y)
+			cs = CubicSpline(times, y_final)
+
 
 		#Filter out missing signal values before interpolation
 		else:
+
 			#Remove NaN values from signal and time domain for interpolation
 			y_filtered = y.copy()
 			y_filtered = np.delete(y_filtered, empty_frames)
@@ -1146,14 +1276,21 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		#Calculate slope
 		#Presumably should be flat(ish) if good
 		#Or fit line
-		slope, intercept, r_value, p_value, std_err = stats.linregress(times, y_final)
+		slope, intercept, r_value, p_value, std_err = stats.linregress(td, cs(td))
 
-		mad = stats.median_absolute_deviation(y_final)
+		#Median Absolute Deviation across signal
+		mad = stats.median_absolute_deviation(cs(td))
 
-#		if np.float64(p_value) < np.float_power(10, -8):
-#			sig = "sig"
-#		else:
-#			sig = "no"
+		#Rolling MAD 
+		mad_windows, win_indices = rolling_window(cs(td), win_size = 20, win_step = 5, direction = "forward")
+		#mad_windows, win_indices = rolling_window(cs(td), win_size = 10, win_step = 3, direction = "forward")
+	
+		out_fig = out_dir + "/rolling_median_absolute_deviation.png"
+		#Plot rolling MAD	
+		plt.plot(mad_windows)
+		plt.hlines(y = np.mean(mad_windows), xmin = 0, xmax = len(mad_windows), linestyles = "dashed")
+		plt.savefig(out_fig, bbox_inches='tight')
+		plt.close()
 
 #		out_file = out_dir + "/signal.stats.txt"
 #		with open(out_file, 'w') as output:
@@ -1161,14 +1298,9 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 #			output.write("well\tmad\tslope\tp_value\tr_value\n")
 #			output.write(well_number + "\t" + str(mad) + "\t" + str(slope) + "\t" + str(p_value) + "\t" + str(r_value) + "\t" + sig + "\n")
 
-		#prominent_peaks = [idx for idx, prominence in enumerate(prominences[0]) if prominence > 0.2]
-
 		#Peak Calling
-		peaks, _ = find_peaks(cs(td), height = np.mean(cs(td)))
-		#Peak prominence
-#		prominences = peak_prominences(cs(td), peaks)
-#		prominent_peaks = [idx for idx, prominence in enumerate(prominences[0])]
-
+		#peaks, _ = find_peaks(cs(td), height = np.mean(cs(td)), width = 5)
+		peaks, _ = find_peaks(cs(td), height = np.mean(cs(td)), width = 5, prominence = 1)
 
 		out_fig = out_dir + "/bpm_trace.png"
 		plt.plot(td, cs(td))
@@ -1186,6 +1318,16 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			#Detrend and normalise cubic spline interpolated data
 			norm_cs = detrendSignal(cs,td)
 
+			out_fig = out_dir + "/bpm_trace.savgol_filter.png"
+			plt.plot(td, norm_cs(td))
+#			plt.plot(td[peaks], cs(td)[peaks], "x")
+			plt.ylabel('Heart intensity (CoV)')
+			plt.xlabel('Time [sec]')
+			plt.hlines(y = np.mean(norm_cs(td)), xmin = td[0], xmax = td[-1], linestyles = "dashed")
+			plt.savefig(out_fig,bbox_inches='tight')
+			plt.close()
+
+
 			#Root mean square of successive differences
 			#first calculating each successive time difference between heartbeats in ms. Then, each of the values is squared and the result is averaged before the square root of the total is obtained
 #			rmssd = getRMSSD(peak_times)
@@ -1194,7 +1336,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			heart_range = (0.5, 6)
 
 			#Perform Fourier Analysis 
-			psd, freqs, peak, bpm_fourier = fourierHR(cs, td, heart_range)
+			psd, freqs, peak, bpm_fourier = fourierHR(norm_cs, td, heart_range)
 	
 			if bpm_fourier is not None:	
 				#Round heart rate
@@ -1219,13 +1361,13 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 				output.write("well\twell_id\tbpm\n")
 				output.write(well_number + "\t" + well + "\t" +  str(bpm_fourier) + "\n")
 
-#		else:
-#			out_file = out_dir + "/heart_rate.txt"
+		else:
+			out_file = out_dir + "/heart_rate.txt"
 			#Write bpm to file
-#			with open(out_file, 'w') as output:
+			with open(out_file, 'w') as output:
 
-#				output.write("well\twell_id\tbpm\tnote\n")
-#				output.write(well_number + "\t" + well + "\tNA\tsignal_issue\n")
+				output.write("well\twell_id\tbpm\tnote\n")
+				output.write(well_number + "\t" + well + "\tNA\tsignal_issue\n")
 	else:
 		out_file = out_dir + "/heart_rate.txt"
 		#Write bpm to file
@@ -1250,3 +1392,4 @@ else:
 #Issues 
 #Heart obscured and picks up blood vessels
 #differences in illumination between frames (flickering)
+
