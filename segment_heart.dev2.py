@@ -22,6 +22,9 @@ from scipy import ndimage as ndi
 from scipy.signal import find_peaks, peak_prominences, welch, savgol_filter
 from scipy.interpolate import CubicSpline
 
+from hrv.rri import RRi
+from hrv.detrend import sg_detrend
+
 import matplotlib
 matplotlib.use('Agg')
 from matplotlib import pyplot as plt
@@ -324,13 +327,33 @@ def rolling_diff(index, frames, win_size = 5, direction = "forward", min_area = 
 
 	return(masked_frame, abs_diffs)
 
+#Detect extreme outliers and filter them out
+#Outliers due to e.g. sudden movement of whole embryo or flickering light 
+def iqrFilter(times, signal):
+	
+	#Calculate interquartile range from signal 
+	q3, q1 = np.percentile(signal, [75 ,25])
+	iqr = q3 - q1
+
+	#Filter signal based on IQR
+	iqr_upper = q3 + (iqr * 1.5)
+	iqr_lower = q1 - (iqr * 1.5)
+
+	passed = (signal > iqr_lower) & (signal < iqr_upper)
+	filtered_times = times[passed]
+	filtered_signal = signal[passed]
+
+	return(filtered_times, filtered_signal)
+	
+
 #Detrend heart signal and smoothe
-def detrendSignal(interpolated_signal, time_domain, window_size = 33):
+def detrendSignal(interpolated_signal, time_domain, window_size = 15):
 	
 	"""
 	Use Savitzky–Golay convolution filter to smoothe time-series data.
 	Fits successive sub-sets of adjacent data points with a low-degree polynomial using linear least squares.
 	Increases the precision of the data without distorting the signal tendency.
+	Sav-Gol filter AKA LOESS (locally estimated scatterplot smoothing) 
 	* interpolated_signal
 		Interpolated raw signal intensities. 
 	* time_domain 
@@ -341,22 +364,20 @@ def detrendSignal(interpolated_signal, time_domain, window_size = 33):
 	#Savitzky–Golay filter to smooth signal
 	#Window size must be odd integer
 	data_detrended = savgol_filter(interpolated_signal(time_domain), window_size, 3)
-#	data_detrended = savgol_filter(interpolated_signal(time_domain), 29, 3)
 
-#	p = np.polyfit(time_domain - time_domain[0], interpolated_signal(time_domain), 1)
-
-#	dat_notrend = interpolated_signal(time_domain) - np.polyval(p, time_domain - time_domain[0])
-
-#	std = dat_notrend.std()  # Standard deviation
-#	var = std ** 2  # Variance
+#	data = RRi(interpolated_signal(time_domain), time=time_domain)
+#	data_detrended2 = sg_detrend(data, window_size = window_size, polyorder=3)
 
 	#Normalise Signal
-#	normalised_signal = dat_notrend / std 
+	normalised_signal = data_detrended / data_detrended.std() 
 
 	#Generate new Cubic Spline based on smoothed data
 	norm_cs = CubicSpline(time_domain, data_detrended)
+#	norm_cs2 = CubicSpline(time_domain, data_detrended2)
+	norm_cs2 = CubicSpline(time_domain, normalised_signal)
 
-	return(norm_cs)
+#	return(norm_cs, norm_cs2)
+	return(norm_cs, norm_cs2)
 
 #Calculate Median Absolute Deviation 
 #for a given numeric vector
@@ -441,11 +462,11 @@ def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 6)):
 	peaks, _ = find_peaks(psd, prominence = 1, distance = 5)
 
 	#Filter out peaks lower than 1
-##	peaks = peaks[psd[peaks] >= 1]
+	peaks = peaks[psd[peaks] >= 1]
 ##	peaks = peaks[psd[peaks] >= 0.75] #for interpolated
 ##	peaks = peaks[psd[peaks] >= 15000] #for detrended and interpolated
 #	peaks = peaks[psd[peaks] >= 20000] #for detrended and interpolated
-	peaks = peaks[psd[peaks] >= 10000] #for detrended and interpolated
+#	peaks = peaks[psd[peaks] >= 10000] #for detrended and interpolated
 
 	n_peaks = len(peaks)
 	if n_peaks > 0:
@@ -1240,9 +1261,11 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		#No filtering needed for interpolation if no empty frames
 		if len(empty_frames) == 0:
 
-			y_final = y.copy()
-			cs = CubicSpline(times, y_final)
+			#Filter signal with IQR 
+			times_final, y_final = iqrFilter(times, y)
 
+			#y_final = y.copy()
+			cs = CubicSpline(times_final, y_final)
 
 		#Filter out missing signal values before interpolation
 		else:
@@ -1253,12 +1276,14 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			times_filtered = times.copy()
 			times_filtered = np.delete(times_filtered, empty_frames)
 
-			#Perform cubic spline interpolation to calculate in missing values
-			cs = CubicSpline(times_filtered, y_filtered)
+			#Filter signal with IQR 
+			times_final, y_final = iqrFilter(times_filtered, y_filtered)
 
-			#Replace NaNs with interpolated values
-			y_final = y.copy()
-			y_final[empty_frames] = cs(times[empty_frames])
+			#Perform cubic spline interpolation to calculate in missing values
+			cs = CubicSpline(times_final, y_final)
+
+#			y_final = y.copy()
+#			y_final[empty_frames] = cs(times[empty_frames])
 
 		meanY = np.mean(y_final)
 
@@ -1268,8 +1293,8 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	
 			output.write("Time" + "\t" + "Signal (CoV)" + "\n")
 
-			for i in range(len(times)):
-				time = times[i]
+			for i in range(len(times_final)):
+				time = times_final[i]
 				signal = y_final[i]
 				output.write(str(time) + "\t" + str(signal) + "\n")
 
@@ -1280,23 +1305,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 		#Median Absolute Deviation across signal
 		mad = stats.median_absolute_deviation(cs(td))
-
-		#Rolling MAD 
-		mad_windows, win_indices = rolling_window(cs(td), win_size = 20, win_step = 5, direction = "forward")
-		#mad_windows, win_indices = rolling_window(cs(td), win_size = 10, win_step = 3, direction = "forward")
-	
-		out_fig = out_dir + "/rolling_median_absolute_deviation.png"
-		#Plot rolling MAD	
-		plt.plot(mad_windows)
-		plt.hlines(y = np.mean(mad_windows), xmin = 0, xmax = len(mad_windows), linestyles = "dashed")
-		plt.savefig(out_fig, bbox_inches='tight')
-		plt.close()
-
-#		out_file = out_dir + "/signal.stats.txt"
-#		with open(out_file, 'w') as output:
-
-#			output.write("well\tmad\tslope\tp_value\tr_value\n")
-#			output.write(well_number + "\t" + str(mad) + "\t" + str(slope) + "\t" + str(p_value) + "\t" + str(r_value) + "\t" + sig + "\n")
 
 		#Peak Calling
 		#peaks, _ = find_peaks(cs(td), height = np.mean(cs(td)), width = 5)
@@ -1315,8 +1323,10 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		#(i.e. if p-value highly significant)
 		if (np.float64(p_value) > np.float_power(10, -8)) or (mad <= 0.02) or (np.absolute(slope) <= 0.002):
 
-			#Detrend and normalise cubic spline interpolated data
-			norm_cs = detrendSignal(cs,td)
+			#Detrend and smoothe cubic spline interpolated data 
+			#with Savitzky–Golay filter
+#			norm_cs = detrendSignal(cs,td, window_size = 25)
+			norm_cs, norm2 = detrendSignal(cs,td, window_size = 25)
 
 			out_fig = out_dir + "/bpm_trace.savgol_filter.png"
 			plt.plot(td, norm_cs(td))
@@ -1327,6 +1337,17 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			plt.savefig(out_fig,bbox_inches='tight')
 			plt.close()
 
+			out_fig = out_dir + "/bpm_trace.scaled.png"
+			plt.plot(td, norm2(td))
+#			plt.plot(td[peaks], cs(td)[peaks], "x")
+			plt.ylabel('Heart intensity (CoV)')
+			plt.xlabel('Time [sec]')
+#			plt.hlines(y = np.mean(norm_cs(td)), xmin = td[0], xmax = td[-1], linestyles = "dashed")
+			plt.savefig(out_fig,bbox_inches='tight')
+			plt.close()
+
+			#Root mean square of successive differences
+			#first calculating each successive time difference between heartbeats in ms. Then, each of the values is squared and the result is averaged before the square root of the total is obtained
 
 			#Root mean square of successive differences
 			#first calculating each successive time difference between heartbeats in ms. Then, each of the values is squared and the result is averaged before the square root of the total is obtained
@@ -1335,8 +1356,12 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			#Heart range in Hz
 			heart_range = (0.5, 6)
 
+			#Remove first 5% of interpolated, detrended data-points
+#			filtered_
+
 			#Perform Fourier Analysis 
-			psd, freqs, peak, bpm_fourier = fourierHR(norm_cs, td, heart_range)
+#			psd, freqs, peak, bpm_fourier = fourierHR(norm_cs, td, heart_range)
+			psd, freqs, peak, bpm_fourier = fourierHR(norm2, td, heart_range)
 	
 			if bpm_fourier is not None:	
 				#Round heart rate
