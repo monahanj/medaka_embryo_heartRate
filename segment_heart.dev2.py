@@ -10,20 +10,16 @@ import numpy as np
 import cv2
 
 import skimage
-from skimage.util import compare_images, img_as_ubyte, img_as_float
-from skimage.filters import threshold_triangle, threshold_otsu, threshold_yen, roberts, sobel, scharr
-from skimage.measure import label#, find_contours 
-from skimage.feature import peak_local_max, canny
+from skimage.util import img_as_ubyte, img_as_float
+from skimage.filters import threshold_triangle, threshold_yen 
+from skimage.measure import label
 from skimage import color
 
 import scipy
 from scipy import stats
-from scipy import ndimage as ndi
+from scipy import signal
 from scipy.signal import find_peaks, peak_prominences, welch, savgol_filter
 from scipy.interpolate import CubicSpline
-
-from hrv.rri import RRi
-from hrv.detrend import sg_detrend
 
 import matplotlib
 matplotlib.use('Agg')
@@ -59,15 +55,7 @@ loop = args.loop
 crop = args.crop
 out_dir = args.out
 
-#Make output dir if doesn't exist
-try:
-	os.makedirs(out_dir)
-except OSError as e:
-	if e.errno != errno.EEXIST:
-		raise
-
 #All images in subdirs, one level below if tiff, 2 below if jpeg
-
 #If multiple loops
 if args.loop:
 
@@ -372,12 +360,11 @@ def detrendSignal(interpolated_signal, time_domain, window_size = 15):
 	normalised_signal = data_detrended / data_detrended.std() 
 
 	#Generate new Cubic Spline based on smoothed data
-	norm_cs = CubicSpline(time_domain, data_detrended)
-#	norm_cs2 = CubicSpline(time_domain, data_detrended2)
+#	norm_cs = CubicSpline(time_domain, data_detrended)
 	norm_cs2 = CubicSpline(time_domain, normalised_signal)
 
 #	return(norm_cs, norm_cs2)
-	return(norm_cs, norm_cs2)
+	return(norm_cs2)
 
 #Calculate Median Absolute Deviation 
 #for a given numeric vector
@@ -608,20 +595,6 @@ def welchHR(interpolated_signal, time_domain, heart_range = (1, 6)):
 
 	return(bpm)
 
-#TODO
-#Wavelet Analysis
-#def waveletHR(normalised_interpolated_signal, time_domain, heart_range = (0.5, 6)):
-
-	#import pywt
-	#import pycwt as wavelet
-
-	#out_fig = out_dir + "/bpm_trace.detrended.png"
-	#plt.plot(time_domain, normalised_interpolated_signal)
-	#plt.savefig(out_fig)
-	#plt.close()
-
-#	return(bpm)
-
 #Calculate RMSSD
 #Root mean square of successive differences
 def getRMSSD(beat_times):
@@ -739,12 +712,11 @@ for frame in well_frames:
 
 		#Find circle i.e. the embryo in the yolk sac 
 		img_grey = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
-		img_blur = cv2.GaussianBlur(img_grey, (3, 3), 0)
 
+		#Edge detection
+		edges = cv2.Canny(img_grey,100,200)
 
-		#list = numpy.array(list, dtype=numpy.float64)
-
-		circles = cv2.HoughCircles(img_blur, cv2.HOUGH_GRADIENT, 1, 150, param1=50, param2=30)
+		circles = cv2.HoughCircles(edges, cv2.HOUGH_GRADIENT, 1, 150, param1=50, param2=30)
 
 		if circles is not None:
 
@@ -823,6 +795,16 @@ for frame in well_frames:
 		imgs_meta['loop'] = [loop] #[frame_details[3]]
 		imgs_meta['frame_number'] = [frame_number] #[frame_details[5]]
 		imgs_meta['time'] = [time]
+
+
+#Add well position to output directory path
+out_dir = out_dir + "_" + plate_pos
+#Make output dir if doesn't exist
+try:
+	os.makedirs(out_dir)
+except OSError as e:
+	if e.errno != errno.EEXIST:
+		raise
 
 #Save original frame with embryo highlighted with a circle
 img_out = img.copy()
@@ -1261,10 +1243,13 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		#No filtering needed for interpolation if no empty frames
 		if len(empty_frames) == 0:
 
-			#Filter signal with IQR 
-			times_final, y_final = iqrFilter(times, y)
+			#Remove any linear trends
+			detrended = signal.detrend(y)
 
+			#Filter signal with IQR 
+			times_final, y_final = iqrFilter(times, detrended)
 			#y_final = y.copy()
+
 			cs = CubicSpline(times_final, y_final)
 
 		#Filter out missing signal values before interpolation
@@ -1276,16 +1261,16 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			times_filtered = times.copy()
 			times_filtered = np.delete(times_filtered, empty_frames)
 
+			#Remove any linear trends
+			detrended = signal.detrend(y_filtered)
+
 			#Filter signal with IQR 
-			times_final, y_final = iqrFilter(times_filtered, y_filtered)
+			times_final, y_final = iqrFilter(times_filtered, detrended)
 
 			#Perform cubic spline interpolation to calculate in missing values
 			cs = CubicSpline(times_final, y_final)
 
-#			y_final = y.copy()
-#			y_final[empty_frames] = cs(times[empty_frames])
-
-		meanY = np.mean(y_final)
+		meanY = np.mean(cs(td))
 
 		#Write Signal to file
 		out_signal = out_dir + "/medaka_heart.signal_CoV.txt"
@@ -1325,8 +1310,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 			#Detrend and smoothe cubic spline interpolated data 
 			#with Savitzky–Golay filter
-#			norm_cs = detrendSignal(cs,td, window_size = 25)
-			norm_cs, norm2 = detrendSignal(cs,td, window_size = 25)
+			norm_cs = detrendSignal(cs, td, window_size = 25)
 
 			out_fig = out_dir + "/bpm_trace.savgol_filter.png"
 			plt.plot(td, norm_cs(td))
@@ -1337,31 +1321,22 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			plt.savefig(out_fig,bbox_inches='tight')
 			plt.close()
 
-			out_fig = out_dir + "/bpm_trace.scaled.png"
-			plt.plot(td, norm2(td))
-#			plt.plot(td[peaks], cs(td)[peaks], "x")
-			plt.ylabel('Heart intensity (CoV)')
-			plt.xlabel('Time [sec]')
-#			plt.hlines(y = np.mean(norm_cs(td)), xmin = td[0], xmax = td[-1], linestyles = "dashed")
-			plt.savefig(out_fig,bbox_inches='tight')
-			plt.close()
-
 			#Root mean square of successive differences
 			#first calculating each successive time difference between heartbeats in ms. Then, each of the values is squared and the result is averaged before the square root of the total is obtained
 
-			#Root mean square of successive differences
-			#first calculating each successive time difference between heartbeats in ms. Then, each of the values is squared and the result is averaged before the square root of the total is obtained
 #			rmssd = getRMSSD(peak_times)
 
 			#Heart range in Hz
 			heart_range = (0.5, 6)
 
-			#Remove first 5% of interpolated, detrended data-points
-#			filtered_
+                        #Remove first 2.5% of interpolated, detrended data-points
+                        #Frequently issue with first few data-points
+			to_keep = range(int(len(td) * 0.025),len(td))
+			filtered_td = td[to_keep]
 
 			#Perform Fourier Analysis 
 #			psd, freqs, peak, bpm_fourier = fourierHR(norm_cs, td, heart_range)
-			psd, freqs, peak, bpm_fourier = fourierHR(norm2, td, heart_range)
+			psd, freqs, peak, bpm_fourier = fourierHR(norm_cs, filtered_td, heart_range)
 	
 			if bpm_fourier is not None:	
 				#Round heart rate
