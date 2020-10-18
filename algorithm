@@ -1,0 +1,74 @@
+#Medaka heart segmentation and rate algorithm
+
+All analysis done in python.
+Bash wrapper to run script and feed parameters
+
+Image analysis done using opencv and scikit-image
+Numpy and scipy used in calculations
+Plotting with matplotlib and seaborn
+
+############ Algorithm ###############
+######################################
+#1 Read in images with opencv
+Creates dict of images
+Creates pandas dataframe based on the verbose image filenames.
+
+#2 Detect embryo if need to crop (detectEmbryo fxn)
+Convert frame to greyscale
+Perform edge detection
+Perform Hough Circle detection 
+Return coords of largest circle
+Take most common circle across the frames to be the embryo
+Crop based on radius coords +/- 50
+
+#3 Proceed if less than 5% frames empty
+Calculate fps from frame timestamps in pandas dataframe
+
+#4 Normalise across frames (if tiff)
+Convert frames to greyscale
+Divide all tiff pixels by the max pixel value in the tiff stack
+Convert back to RGB
+(Write to mp4 video)
+
+#5 Heart Region of Interest
+Starts from first non-empty frame
+#5a Rolling absolute difference (rolling_diff) with window size of 2 (frame j vs. j-1)
+Convert norm frame to greyscale
+Blur frame
+absolute difference between frames in window
+Triangle thresholding on absolute difference between the 2 frames
+erode to remove noise
+#5b Filter down to heart ROI
+Sum the thresholded differences
+Erode to remove noise
+Perform yen thresholding 
+
+#6 Filter ROI based on object sizes and overlap with the top 250 most changeable pixels
+Contour the ROI object and QC
+Only proceed if putative heart ROI meets certain criteria
+overlap_pixels >= (top_pixels * 0.7)) or (pixel_ratio >= 0.1)
+pixel_ratio = area of intersection between changeable pixels and contoured area 
+
+#7 Calculate signal in heart region and estimate heart rate from it using Fourier Transform
+proceed if ROI mask exists and is made up of fewer than 3 objects
+7b is current method, but pixel aprroach looks to be more robust so will swith tho this.
+
+#7a signal per pixel in the region to get rate
+Extract signal per pixel across all frames, 
+Cubic Spline Interpolation per pixel
+Fourier transform per pixel
+Select the frequencies with largest power spectrum in range 0.5 to 5 Hz per pixel
+Randomly select 1000 (may be less if region small) of these freqs.
+Perform Kernel Density Estimation and take the most common freq to be the heart rate 
+
+#7b signal in whole region based on the coefficient of variation across it
+Remove missing values and IQR Filter signal
+Detrend signal
+Cubic Spline Interpolation
+Smooth with Savitzky–Golay filter, window size = 21
+Fourier Transform to get heart rate within 0.5 to 5 Hz
+
+
+
+
+
