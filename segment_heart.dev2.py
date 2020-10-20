@@ -6,6 +6,8 @@ import os
 import glob2
 import errno
 
+import random
+
 import numpy as np
 import cv2
 
@@ -18,6 +20,7 @@ from skimage import color, feature
 
 import scipy
 from scipy import stats
+from scipy.stats import gaussian_kde
 from scipy import signal
 from scipy.signal import find_peaks, peak_prominences, welch, savgol_filter
 from scipy.interpolate import CubicSpline
@@ -25,6 +28,7 @@ from scipy.interpolate import CubicSpline
 import matplotlib
 matplotlib.use('Agg')
 from matplotlib import pyplot as plt
+import seaborn as sns
 
 from collections import Counter
 
@@ -203,18 +207,6 @@ def normVideo(frames):
 
 	return(norm_frames)
 
-#Detect eyes from frame
-def detectEyes(frame):
-
-	#Tresholding to detect eyes 
-	frame_grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-	eye_mask = cv2.inRange(frame_grey, 0, 50)
-
-	#Opening
-	eye_mask = cv2.morphologyEx(eye_mask, cv2.MORPH_OPEN, kernel)  
-
-	return(eye_mask)
-
 #Pre-process frame
 def processFrame(frame):
 	"""Image pre-processing and illumination normalisation"""
@@ -232,11 +224,7 @@ def processFrame(frame):
 	#Merge the CLAHE enhanced L-channel with the A and B channel
 	limg = cv2.merge((cl,a,b))
 
-	#Convert LAB back to RGB colour 
-#	out_frame = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
-
 	#Convert to greyscale
-#	frame_grey = cv2.cvtColor(out_frame, cv2.COLOR_BGR2GRAY)
 	frame_grey = cl 
 
 	#Convert CLAHE-normalised greyscale frame back to BGR
@@ -335,7 +323,7 @@ def rolling_diff(index, frames, win_size = 5, direction = "forward", min_area = 
 		_, _, old_blur = processFrame(frame0)
 
 		#Determine absolute differences between current and previous frame
-		#Frame[i] vs. frame[i + 1] ... [i + 4]
+		#Frame[j-1] vs. frame[j]... 
 
 		#Generate blank images for masking
 		rows, cols, _ = frame0.shape
@@ -359,15 +347,6 @@ def rolling_diff(index, frames, win_size = 5, direction = "forward", min_area = 
 
 		frame = frames[window_indices[-1]]
 		_, _, frame_blur = processFrame(frame)
-
-#		import vigra
-#		from past.utils import old_div
-
-#		inner_scale = 
-#		outer_scale = old_div(scale, 2.0)
-#		vigra.filters.structureTensorEigenvalues(input_data, innerScale=inner_scale, outerScale=outer_scale, out=tempout, window_size=WINDOW_SIZE, roi=roi   )
-#		plt.imshow(frame0_hessian)
-#		plt.show()
 
 		#Determine absolute differences between current and previous frame
 		#Frame[i] vs frame[i - 1] .... [(i - 3]
@@ -536,7 +515,7 @@ def rolling_window(signal, win_size = 20, win_step = 5, direction = "forward"):
 	return(windows, window_indices)
 
 #Perform a Fourier Transform on interpolated signal from heart region
-def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 6)):
+def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 5)):
 
 	"""
 	When 3 or less peaks detected is Fourier, 
@@ -560,7 +539,7 @@ def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 6)):
 	psd = psd[freqs > 0]
 	freqs = freqs[freqs > 0]
 
-	#Calculate ylims for xrange 0.5 to 6 Hz
+	#Calculate ylims for xrange 0.5 to 5 Hz
 	heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))[0]
 
 	#Peak Calling on Fourier Transform data
@@ -694,7 +673,7 @@ def getPixelSignal(grey_frames):
 					pixel_vals.append(pixel)
 
 				else:
-					pixel_vals.append(NA)
+					pixel_vals.append(np.nan)
 
 
 			#Filter out masked pixels, 
@@ -708,23 +687,30 @@ def getPixelSignal(grey_frames):
 	return(pixel_signals)
 
 #Plot multiple pixel signal intensities on same graph
-def multiplot_signal(pixel_signals, times, pixel_num = 1000, figsize = (40,4), heart_range = (0.5, 6)):
+def multiplot_signal(pixel_signals, times, pixel_num = 1000, heart_range = (0.5, 5)):
 
 	"""
 	Plot multiple pixel signal intensities on same graph
 	* pixel_signals DICT
 		Dictionary of pixel signal intensities
 	"""
-	fig = plt.figure(figsize=figsize)
 	ax = plt.subplot()
 
-	#TODO	
-	#Randomly select N pixels in to determien heart-rate from 
+	#Randomly select N pixels in to determine heart-rate from 
 	#Limit to 1000 pixels in interest of speed
+	if len(pixel_signals) > 1000:
 
+		#Set seed
+		random.seed(42)
 
+		#Select 1000 (pseudo-)random pixels
+		selected_pixels = random.sample(list(pixel_signals.keys()), k= 1000)
+	else:
+		selected_pixels = list(pixel_signals.keys())
+
+	highest_freqs = []
 	#Plot signals for selected pixels
-	for pixel in pixel_signals:
+	for pixel in selected_pixels:
 
 		pixel_signal = pixel_signals[pixel]
 
@@ -732,40 +718,60 @@ def multiplot_signal(pixel_signals, times, pixel_num = 1000, figsize = (40,4), h
 		norm = CubicSpline(times, pixel_signal)
 		psd, freqs, _, _ = fourierHR(norm, times)
 
-		#Plot frequency of Fourier Power Spectra
-		_ = ax.plot(freqs,psd)
+		#Determine the peak within the heart range
+		heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))[0]
 
-		# Only plot within heart range (in Hertz) if necessary
-		if heart_range is not None:
-			_ = ax.set_xlim(heart_range)
+		#Spectra within heart range
+		heart_psd = psd[heart_indices]
+		heart_freqs = freqs[heart_indices]
+
+		#Index of largest spectrum in heart range
+		index_max = np.argmax(heart_psd)
+		#Corresponding frequency
+		highest_freq = heart_freqs[index_max]
+		highest_freqs.append(highest_freq)
+
+		#Plot frequency of Fourier Power Spectra
+		_ = ax.plot(freqs,psd, color='grey', alpha=0.5)
+
+	# Only plot within heart range (in Hertz)
+	_ = ax.set_xlim(heart_range)
 
 	_ = ax.set_xlabel('Frequency (Hz)')
 	_ = ax.set_ylabel('Power Spectra')
 
-	return(ax)
+	return(ax, highest_freqs)
 
-#Calculate RMSSD
-#Root mean square of successive differences
-def getRMSSD(beat_times):
+def plot_PixelFreqs(frequencies, figsize = (10,7), heart_range = (0.5, 5)):
 
-	#Root mean square of successive differences of successive beats
-	#first calculating each successive time difference between heartbeats in ms. 
-	#Each of value is squared and the result is averaged before the square root of the total is obtained
+	density = gaussian_kde(frequencies)
+	xs = np.linspace(heart_range[0],heart_range[-1],500)
+	ys = density(xs)
 
-	#Calculate beat-to-beat times
-	#(time between peaks)
-	peak2peak = [t2 - t1 for t1, t2 in zip(beat_times, beat_times[1:])]
-                
-	#Square peak2peak
-	peak2peak_sq = [i**2 for i in peak2peak]
+	#Detect most common Fourier Peak
+	max_index = np.argmax(ys)
+	max_x = xs[max_index]
+	max_y = ys[max_index]
 
-	#Average squared peak2peak
-	mean_peak2peak_sq = np.mean(peak2peak_sq)
-                
-	#Square root of Average squared peak2peak
-	rmssd = np.sqrt(mean_peak2peak_sq)
+	bpm = max_x * 60
+	#Prepare label for plot
+	bpm_label = str(int(bpm)) + " bpm"
 
-	return(rmssd)
+	sns.set_style('white')
+	ax = plt.subplot()
+
+	#Plot peak densities and label the max
+#	_ = sns.displot(frequencies, ax = ax, kind = "kde", rug=True, fill=True)
+	_ = sns.kdeplot(frequencies, ax = ax, fill=True)#, bw_adjust=.5)
+
+	_ = ax.plot(max_x,max_y, 'bo', ms=10)
+	_ = ax.annotate(bpm_label, xy=(max_x,max_y), xytext=(max_x + (max_x * 0.1), max_y + (max_y * 0.01), arrowprops=dict(facecolor='black', shrink=0.05))
+
+	_ = ax.set_title("Pixel Fourier Transform Maxima")
+	_ = ax.set_xlabel('Frequency (Hz)')
+	_ = ax.set_ylabel('Density')
+
+	return(ax, bpm)
 
 #Generate html report from images and videos using jinja2
 #def htmlReport():
@@ -877,18 +883,17 @@ for frame in well_frames:
 	#Make dict based on the file data fields
 	try:
 		imgs_meta['frame'].append(frame)
-		imgs_meta['well'].append(plate_pos) #(frame_details[0])
-		imgs_meta['loop'].append(loop) #(frame_details[3])
-		imgs_meta['frame_number'].append(frame_number) #(frame_details[5])
+		imgs_meta['well'].append(plate_pos) 
+		imgs_meta['loop'].append(loop) 
+		imgs_meta['frame_number'].append(frame_number) 
 		imgs_meta['time'].append(time)
 
 	except KeyError:
 		imgs_meta['frame'] = [frame]
-		imgs_meta['well'] = [plate_pos] #[frame_details[0]]
-		imgs_meta['loop'] = [loop] #[frame_details[3]]
-		imgs_meta['frame_number'] = [frame_number] #[frame_details[5]]
+		imgs_meta['well'] = [plate_pos] 
+		imgs_meta['loop'] = [loop] 
+		imgs_meta['frame_number'] = [frame_number] 
 		imgs_meta['time'] = [time]
-
 
 #Add well position to output directory path
 out_dir = out_dir + "_" + plate_pos
@@ -1021,19 +1026,11 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 	#Generate blank images for masking
 	rows, cols, _ = frame0.shape
-#	eye_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
 	heart_roi = np.zeros(shape=[rows, cols], dtype=np.uint8)
 
 	#Process frame0
 	old_cl, old_grey, old_blur = processFrame(frame0)
 	f0_grey = old_grey.copy()
-
-	#Detect eyes in all frames
-#	eye_masks = [detectEyes(frame) for frame in norm_frames if frame is not None]
-
-	#Combine all individual eye masks  
-#	for img in eye_masks:
-#		eye_mask = cv2.add(eye_mask, img)
 
 	#Numpy matrix: 
 	#Coord 1 = row(s)
@@ -1151,8 +1148,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 		contour_area =  cv2.contourArea(test_contour)
 	
-#		print(contour_area)
-#		print(overlap_pixels)
 		#Calculate minimum area parallelogram that encloses the contoured area
 	        #centre, size, angle = cv2.minAreaRect(test_contour)
 		#(x, y), (width, height), angle = cv2.minAreaRect(test_contour)
@@ -1342,25 +1337,34 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		times_final, y_final, cs = interpolate_signal(times, y, empty_frames)
 		meanY = np.mean(cs(td))
 
+		#TODO
 		#Signal per pixel
 		pixel_signals = getPixelSignal(masked_frames)
 
-
-		plot_dir = out_dir + "/pixels"
-		#Make output dir if doesn't exist
-		try:
-			os.makedirs(plot_dir)
-		except OSError as e:
-			if e.errno != errno.EEXIST:
-				raise
-
-		out_fourier = plot_dir + "/pixel_fourier.png"
-		ax = multiplot_signal(pixel_signals, times) 
-
-#figsize = (15,5))
-		plt.savefig(out_fourier)#, bbox_inches='tight')
+		#Plot Pixel Fourier Transforms
+		out_fourier = out_dir + "/pixel_fourier.png"
+		fig, ax = plt.subplots(figsize=(10, 7))
+		ax, highest_freqs = multiplot_signal(pixel_signals, times)
+		plt.savefig(out_fourier)
+		plt.close()
+		
+		out_fourier2 = out_dir + "/pixel_rate.png"
+		fig, ax = plt.subplots(1,1,figsize=(10, 7))
+		ax, bpm = plot_PixelFreqs(highest_freqs)
+		plt.savefig(out_fourier2)
 		plt.close()
 
+		#QC based on number of peaks and their intensity
+#		peaks, _ = find_peaks(ys, prominence = 1, distance = 5)
+
+		#Peak calling
+#		print(xs)
+#		print(max_x)
+
+
+		#Determine heart rate from most common frequency peak 
+		#in the pixel data
+		#Plot density of highest_freqs	
 
 		#Calculate slope
 		#Presumably should be flat(ish) if good
@@ -1374,6 +1378,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		peaks, _ = find_peaks(cs(td), height = np.mean(cs(td)), width = 5, prominence = 1)
 
 		out_fig = out_dir + "/bpm_trace.png"
+		plt.figure(figsize=(10,2))
 		plt.plot(td, cs(td))
 		plt.plot(td[peaks], cs(td)[peaks], "x")
 		plt.ylabel('Heart intensity (CoV)')
@@ -1392,6 +1397,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			norm_cs = detrendSignal(cs, td, window_size = 21)
 
 			out_fig = out_dir + "/bpm_trace.savgol_filter.png"
+			plt.figure(figsize=(10,2))
 			plt.plot(td, norm_cs(td))
 #			plt.plot(td[peaks], cs(td)[peaks], "x")
 			plt.ylabel('Heart intensity (CoV)')
@@ -1400,13 +1406,8 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			plt.savefig(out_fig,bbox_inches='tight')
 			plt.close()
 
-			#Root mean square of successive differences
-			#first calculating each successive time difference between heartbeats in ms. Then, each of the values is squared and the result is averaged before the square root of the total is obtained
-
-#			rmssd = getRMSSD(peak_times)
-
 			#Heart range in Hz
-			heart_range = (0.5, 6)
+			heart_range = (0.5, 5)
 
                         #Remove first 2.5% of interpolated, detrended data-points
                         #Frequently issue with first few data-points
