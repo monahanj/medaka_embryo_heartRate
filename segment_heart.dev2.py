@@ -372,13 +372,45 @@ def rolling_diff(index, frames, win_size = 5, direction = "forward", min_area = 
 	thresh = cv2.erode(abs_diffs,(7,7), iterations = 3)
 
 	#Filter based on their area
-	#thresh = filterMask(mask = thresh, min_area = min_area)
 	thresh = filterMask(mask = thresh, min_area = min_area)
 
 	#Mask frame
 	masked_frame = maskFrame(frame, thresh)
 
 	return(masked_frame, abs_diffs)
+
+#Generate figure highlighting the probable heart region
+def heartQC_plot(ax, f0_grey, heart_roi,heart_roi_clean,label_maxima, figsize=(15, 15)):
+
+	"""
+	Generate figure to QC heart segmentation
+	"""
+
+	#First frame
+	ax[0, 0].imshow(f0_grey,cmap='gray')
+	ax[0, 0].set_title('Embryo',fontsize=10)
+	ax[0, 0].axis('off')
+
+	#Summed Absolute Difference between sequential frames
+	ax[0, 1].imshow(heart_roi)
+	ax[0, 1].set_title('Summed Absolute\nDifferences', fontsize=10)
+	ax[0, 1].axis('off')
+
+	#Thresholded Differences
+	ax[1, 0].imshow(heart_roi_clean)
+	ax[1, 0].set_title('Thresholded Absolute\nDifferences', fontsize=10)
+	ax[1, 0].axis('off')
+
+	#Overlap between filtered RoI mask and pixel maxima
+	ax[1, 1].imshow(overlay)
+	ax[1, 1].set_title('RoI overlap with maxima', fontsize=10)
+	ax[1, 1].axis('off')
+
+	return(ax)
+
+def qc_mask_contours(contours):
+
+	return(filtered_contours)
 
 #Detect extreme outliers and filter them out
 #Outliers due to e.g. sudden movement of whole embryo or flickering light 
@@ -451,18 +483,13 @@ def detrendSignal(interpolated_signal, time_domain, window_size = 15):
 	#Window size must be odd integer
 	data_detrended = savgol_filter(interpolated_signal(time_domain), window_size, 3)
 
-#	data = RRi(interpolated_signal(time_domain), time=time_domain)
-#	data_detrended2 = sg_detrend(data, window_size = window_size, polyorder=3)
-
 	#Normalise Signal
 	normalised_signal = data_detrended / data_detrended.std() 
 
 	#Generate new Cubic Spline based on smoothed data
-#	norm_cs = CubicSpline(time_domain, data_detrended)
-	norm_cs2 = CubicSpline(time_domain, normalised_signal)
+	norm_cs = CubicSpline(time_domain, normalised_signal)
 
-#	return(norm_cs, norm_cs2)
-	return(norm_cs2)
+	return(norm_cs)
 
 #Calculate Median Absolute Deviation 
 #for a given numeric vector
@@ -522,7 +549,7 @@ def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 5)):
 	the true heart-rate is usually the first one.
 	The second peak may be higher in some circumstances 
 	if BOTH chambers were segmented.
-	Fourier seems to detect frequencies coreesponding to 
+	Fourier seems to detect frequencies corresponding to 
 	1 beat, 2 beats and/or 3 beats in this situation. 
 	"""
 
@@ -543,13 +570,9 @@ def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 5)):
 	heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))[0]
 
 	#Peak Calling on Fourier Transform data
-	#peaks, _ = find_peaks(psd)
 	peaks, _ = find_peaks(psd, prominence = 1, distance = 5)
 
 	#Filter out peaks lower than 1
-#	peaks = peaks[psd[peaks] >= 1] #for interpolated
-#	peaks = peaks[psd[peaks] >= 20000] #for detrended and interpolated
-#	peaks = peaks[psd[peaks] >= 10000] #for detrended and interpolated
 	peaks = peaks[psd[peaks] >= 5000] #for detrended and interpolated
 
 	n_peaks = len(peaks)
@@ -558,7 +581,6 @@ def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 5)):
 		max_peak = max(psd[peaks])
 
 		#Filter peaks based on ratio to largest peak
-		#filtered_peaks = peaks[psd[peaks] >= (max_peak * 0.33)]
 		filtered_peaks = peaks[psd[peaks] >= (max_peak * 0.25)]
 
 		#Calculate heart rate in beats per minute (bpm) from the results of the Fourier Analysis
@@ -585,38 +607,17 @@ def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 5)):
 			#Need something more sophisticated here
 			#If 4 peaks or less, take the first one 
 			elif 1 < len(beat_indices) < 4:
-			#if 1 < len(beat_indices) < 5:
 				beat_freq = beat_freqs[0]
 				beat_power = beat_psd[0]
 
 				bpm = beat_freq * 60
 				peak_coord  = (beat_freq, beat_power)
 
-				#Check if any peaks multiples of eachother
-				#Round if is necessary
-#				print(beat_freqs)
-
-			#if 0 < len(beat_indices) < 4:
-			#	beat_freq = beat_freqs[0]
-			#	beat_power = beat_psd[0]
-
-			#	bpm = beat_freq * 60
-			#	peak_coord  = (beat_freq, beat_power)
-
-			#Else too many to be confident
-			else:
-				bpm = None
-				peak_coord = None
-				
-		else:
-			bpm = None
-			peak_coord = None
-
-	#Flat Fourier
-	else:
+	#Create dummy bpm variable if doesn't exist
+	if "bpm" not in locals():
 		bpm = None
 		peak_coord = None
-
+				
 	return(psd, freqs, peak_coord, bpm)
 
 #Plot Fourier Transform
@@ -674,7 +675,6 @@ def getPixelSignal(grey_frames):
 
 				else:
 					pixel_vals.append(np.nan)
-
 
 			#Filter out masked pixels, 
 			#i.e. those with a sum of zero
@@ -761,11 +761,10 @@ def plot_PixelFreqs(frequencies, figsize = (10,7), heart_range = (0.5, 5)):
 	ax = plt.subplot()
 
 	#Plot peak densities and label the max
-#	_ = sns.displot(frequencies, ax = ax, kind = "kde", rug=True, fill=True)
 	_ = sns.kdeplot(frequencies, ax = ax, fill=True)#, bw_adjust=.5)
 
 	_ = ax.plot(max_x,max_y, 'bo', ms=10)
-	_ = ax.annotate(bpm_label, xy=(max_x,max_y), xytext=(max_x + (max_x * 0.1), max_y + (max_y * 0.01), arrowprops=dict(facecolor='black', shrink=0.05))
+	_ = ax.annotate(bpm_label, xy=(max_x, max_y), xytext=(max_x + (max_x * 0.1), max_y + (max_y * 0.01)), arrowprops=dict(facecolor='black', shrink=0.05))
 
 	_ = ax.set_title("Pixel Fourier Transform Maxima")
 	_ = ax.set_xlabel('Frequency (Hz)')
@@ -842,11 +841,8 @@ for frame in well_frames:
 		#Remove commas
 		time = float(time.replace(",", ""))
 
-	#name = (well, loop, frame_number)
 	name = (plate_pos, loop, frame_number)
-	#frame_details = [well] + frame_details
 	frame_details = [plate_pos] + frame_details
-	#well_id = (well, loop)
 	well_id = (plate_pos, loop)
 
 	#If frame is not empty, read it in
@@ -855,7 +851,6 @@ for frame in well_frames:
 		#Read image in colour
 		#8-bit, 3 channel image
 		img = cv2.imread(frame,1)
-		#img = cv2.imread(frame,-1)
 		imgs[name] = img
 
 		#Crop if necessary based on centre of embryo
@@ -1054,10 +1049,8 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			embryo.append(None)
 		j += 1
 
-	#Get indices of N most changeable pixels
+	#Get indices of 250 most changeable pixels
 	top_pixels = 250
-#	top_pixels = 350
-
 	changeable_pixels = np.unravel_index(np.argsort(heart_roi.ravel())[-top_pixels:], heart_roi.shape)
 
 	#Create boolean matrix the same size as the RoI image
@@ -1069,18 +1062,14 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 	#Perform 'opening' on heat map of absolute differences 
 	#Rounds of erosion and dilation
-	heart_roi_open = cv2.morphologyEx(heart_roi, cv2.MORPH_OPEN, kernel) 
-	#heart_roi_open = cv2.erode(heart_roi, (5,5), iterations = 5)
-	#heart_roi_open = cv2.dilate(heart_roi_open, (7,7), iterations = 1)
+	heart_roi_open = cv2.morphologyEx(heart_roi, cv2.MORPH_OPEN, kernel)
 
 	#Threshold heart RoI to generate mask
-#	yen = threshold_yen(heart_roi_open)
-	yen = threshold_yen(heart_roi)
+	yen = threshold_yen(heart_roi_open)
 	heart_roi_clean = heart_roi_open > yen
 	heart_roi_clean = heart_roi_clean.astype(np.uint8)
 
 	#Filter mask based on area of contours
-	#heart_roi_clean = filterMask(mask = heart_roi_clean, min_area = 150)
 	heart_roi_clean = filterMask(mask = heart_roi_clean, min_area = 100)
 
 	#Scikit image to opencv
@@ -1091,38 +1080,14 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	#Find contours based on thresholded, summed absolute differences
 	contours, _ = cv2.findContours(heart_roi_clean, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 
-	rows, cols = heart_roi_clean.shape
-
-	out_fig = out_dir + "/embryo.frame_diff.png"
-	fig, ax = plt.subplots(2, 2,figsize=(15, 15))
-	#First frame
-	ax[0, 0].imshow(f0_grey,cmap='gray')
-	ax[0, 0].set_title('Embryo',fontsize=10)
-	ax[0, 0].axis('off')
-
-	#Summed Absolute Difference
-	ax[0, 1].imshow(heart_roi)
-	ax[0, 1].set_title('Summed Absolute\nDifferences', fontsize=10)
-	ax[0, 1].axis('off')
-
-	#Thresholded Differences
-	ax[1, 0].imshow(heart_roi_clean)
-	ax[1, 0].set_title('Thresholded Absolute\nDifferences', fontsize=10)
-	ax[1, 0].axis('off')
-
-	#Maxima
-	ax[1, 1].imshow(label_maxima)
-	ax[1, 1].set_title('Most changeable pixels', fontsize=10)
-	ax[1, 1].axis('off')
-
-	plt.savefig(out_fig,bbox_inches='tight')
-	plt.close()
-
 	#Filter contours based on which overlaps with the most changeable pixels
+	rows, cols = heart_roi_clean.shape
 	final_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
 	img = np.zeros(shape=[rows, cols], dtype=np.uint8)
 	mask_contours = []
 	regions = 0
+
+#	mask_contours = qc_mask_contours(heart_roi_clean, contours)
 	for i in range(len(contours)):
 
 		#Contour to test
@@ -1170,8 +1135,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		#Ratio of width to height
 		aspect_ratio = float(width) / float(height)
 
-#		print("aspect_ratio")
-#		print(aspect_ratio)
 		#Take all regions that overlap with the the >=20% of the N most changeable pixels
 		if (overlap_pixels >= (top_pixels * 0.7)) or (pixel_ratio >= 0.1):
 #		if (overlap_pixels >= (top_pixels * 0.5)) or (pixel_ratio >= 0.1):
@@ -1180,49 +1143,22 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			final_mask = cv2.add(final_mask, contour_mask)
 			regions += 1
 
-		#Compare ratio of areas for contour to rectangle
-		#Determines how much the contoured area fills the parallelogram
-#		area_ratio = contour_area / rect_area 
+	#Overlay labelled maxima on filtered mask
+	overlay = color.label2rgb(label_maxima, image = final_mask, alpha=0.7, bg_label=0, bg_color=None, colors=[(1, 0, 0)])
 
-#		if area_ratio >= 0.5:
-			
-#			mask_contours.append(test_contour)	
-#			final_mask = cv2.add(final_mask, contour_mask)
-
-	#Filter on relative distance between heart subregions?
-	#Fit a centroid?
+        #Generate figure showing with potential heart region highlighted 
+	out_fig = out_dir + "/embryo_heart_roi.png"
+	fig, ax = plt.subplots(2, 2,figsize=(15, 15))
+	ax = heartQC_plot(ax, f0_grey, heart_roi, heart_roi_clean, overlay)
+	plt.savefig(out_fig, bbox_inches='tight')
+	plt.close()
 
 	#Check if heart region was detected, i.e. if sum(masked) > 0
 	#and limit number of possible heart regions to 3 or fewer
-	if (final_mask.sum() > 0) and (regions <= 3):  
-
+	#if (final_mask.sum() > 0) and (regions <= 3):  
+	if (final_mask.sum() > 0):  
+	
 		mask = final_mask
-		#Overlay points on RoI
-		overlay = color.label2rgb(label_maxima, image = mask, alpha=0.7, bg_label=0, bg_color=None, colors=[(1, 0, 0)])
-
-		out_fig = out_dir + "/embryo_heart_roi.png"
-
-		fig, ax = plt.subplots(2, 2,figsize=(15, 15))
-		#First  frame
-		#ax[0, 0].imshow(norm_frames[start_frame])
-		ax[0, 0].imshow(f0_grey,cmap='gray')
-		ax[0, 0].set_title('Embryo',fontsize=10)
-		ax[0, 0].axis('off')
-		#Summed Absolute Difference
-		ax[1, 0].imshow(heart_roi)
-		ax[1, 0].set_title('Summed Absolute\nDifferences', fontsize=10)
-		ax[1, 0].axis('off')
-		#Heart RoI
-		ax[0, 1].imshow(heart_roi_clean)
-		ax[0, 1].set_title('Thresholded Differences', fontsize=10)
-		ax[0, 1].axis('off')
-		#Heart RoI Contour
-		ax[1, 1].imshow(overlay)
-		ax[1, 1].set_title('Heart RoI with Pixel Maxima', fontsize=10)
-		ax[1, 1].axis('off')
-
-		plt.savefig(out_fig,bbox_inches='tight')
-		plt.close()
 
 		#Coefficient of variation
 		cvs = {}
@@ -1361,10 +1297,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 #		print(xs)
 #		print(max_x)
 
-
-		#Determine heart rate from most common frequency peak 
-		#in the pixel data
-		#Plot density of highest_freqs	
 
 		#Calculate slope
 		#Presumably should be flat(ish) if good
