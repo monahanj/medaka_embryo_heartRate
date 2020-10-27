@@ -408,9 +408,70 @@ def heartQC_plot(ax, f0_grey, heart_roi,heart_roi_clean,label_maxima, figsize=(1
 
 	return(ax)
 
-def qc_mask_contours(contours):
+def qc_mask_contours(heart_roi):
 
-	return(filtered_contours)
+	#Find contours based on thresholded, summed absolute differences
+	contours, _ = cv2.findContours(heart_roi, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+
+	#Filter contours based on which overlaps with the most changeable pixels
+	rows, cols = heart_roi.shape
+	final_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
+	img = np.zeros(shape=[rows, cols], dtype=np.uint8)
+	regions = 0
+
+	for i in range(len(contours)):
+
+		#Contour to test
+		test_contour = contours[i]
+
+		#Create blank mask
+		contour_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
+
+		#Calculate overlap with the most changeable pixels i.e. max_opening
+		#Draw and fill-in filtered contours on blank mask (contour has to be in a list)
+		cv2.drawContours(contour_mask, [test_contour], -1, (255), thickness = -1)
+
+		contour_pixels = (contour_mask / 255).sum()
+
+		#Find overlap between contoured area and the N most changeable pixels
+		overlap = np.logical_and(maxima, contour_mask)
+		overlap_pixels = overlap.sum()
+
+		#Calculate ratio between area of intersection and contour area 
+		pixel_ratio = overlap_pixels / contour_pixels
+
+#		contour_area =  cv2.contourArea(test_contour)
+	
+		#Calculate minimum area parallelogram that encloses the contoured area
+	        #centre, size, angle = cv2.minAreaRect(test_contour)
+		#(x, y), (width, height), angle = cv2.minAreaRect(test_contour)
+#		rect = cv2.minAreaRect(test_contour)
+#		_, (l1, l2), _ = rect
+
+		#Take the longer length to be the height
+#		if l1 >= l2:
+#			height = l1
+#			width = l2
+#		else:
+#			height = l2
+#			width = l1
+
+#		rect_area = width * height
+
+		#Ratio of contoured area to the area of the minimal-sized rectangle enclosing it.
+#		area_ratio = contour_area / rect_area
+
+		#Ratio of width to height
+#		aspect_ratio = float(width) / float(height)
+
+		#Take all regions that overlap with 80%+ of the 250 most changeable pixels or 
+		#those in which these pixels comprise at least 5% of the pixels in the contoured region
+		if (overlap_pixels >= (top_pixels * 0.8)) or (pixel_ratio >= 0.05):
+
+			final_mask = cv2.add(final_mask, contour_mask)
+			regions += 1
+
+	return(final_mask, regions)
 
 #Detect extreme outliers and filter them out
 #Outliers due to e.g. sudden movement of whole embryo or flickering light 
@@ -441,7 +502,6 @@ def interpolate_signal(times, y, empty_frames):
 
 		#Filter signal with IQR 
 		times_final, y_final = iqrFilter(times, detrended)
-		#y_final = y.copy()
 
 	#Filter out missing signal values before interpolation
 	else:
@@ -655,7 +715,7 @@ def plotFourier(psd, freqs, peak, bpm, heart_range, figure_loc = 211):
 
 	return(ax)
 
-def getPixelSignal(grey_frames):
+def PixelSignal(grey_frames):
 
 	"""
 		Extract individual pixel signal across all frames
@@ -687,7 +747,7 @@ def getPixelSignal(grey_frames):
 	return(pixel_signals)
 
 #Plot multiple pixel signal intensities on same graph
-def multiplot_signal(pixel_signals, times, pixel_num = 1000, heart_range = (0.5, 5)):
+def PixelFourier(pixel_signals, times, empty_frames, pixel_num = 1000, heart_range = (0.5, 5)):
 
 	"""
 	Plot multiple pixel signal intensities on same graph
@@ -714,8 +774,12 @@ def multiplot_signal(pixel_signals, times, pixel_num = 1000, heart_range = (0.5,
 
 		pixel_signal = pixel_signals[pixel]
 
+		#Remove values from empty frames
+		signal_filtered = np.delete(pixel_signal, empty_frames)
+		times_filtered = np.delete(times, empty_frames)
+
 		#Fourier on pixel signal
-		norm = CubicSpline(times, pixel_signal)
+		norm = CubicSpline(times_filtered, signal_filtered)
 		psd, freqs, _, _ = fourierHR(norm, times)
 
 		#Determine the peak within the heart range
@@ -742,40 +806,53 @@ def multiplot_signal(pixel_signals, times, pixel_num = 1000, heart_range = (0.5,
 
 	return(ax, highest_freqs)
 
-def plot_PixelFreqs(frequencies, figsize = (10,7), heart_range = (0.5, 5)):
-
-	density = gaussian_kde(frequencies)
-	xs = np.linspace(heart_range[0],heart_range[-1],500)
-	ys = density(xs)
-
-	#Detect most common Fourier Peak
-	max_index = np.argmax(ys)
-	max_x = xs[max_index]
-	max_y = ys[max_index]
-
-	bpm = max_x * 60
-	#Prepare label for plot
-	bpm_label = str(int(bpm)) + " bpm"
+def PixelFreqs(frequencies, figsize = (10,7), heart_range = (0.5, 5)):
 
 	sns.set_style('white')
 	ax = plt.subplot()
 
-	#Plot peak densities and label the max
+	#Detect most common Fourier Peak using Kernel Density Estimation (KDE)
+	density = gaussian_kde(frequencies)
+	xs = np.linspace(heart_range[0],heart_range[-1],500)
+	ys = density(xs)
+
+	#Plot KDE 
 	_ = sns.kdeplot(frequencies, ax = ax, fill=True)#, bw_adjust=.5)
-
-	_ = ax.plot(max_x,max_y, 'bo', ms=10)
-	_ = ax.annotate(bpm_label, xy=(max_x, max_y), xytext=(max_x + (max_x * 0.1), max_y + (max_y * 0.01)), arrowprops=dict(facecolor='black', shrink=0.05))
-
 	_ = ax.set_title("Pixel Fourier Transform Maxima")
 	_ = ax.set_xlabel('Frequency (Hz)')
 	_ = ax.set_ylabel('Density')
+	# Only plot within heart range (in Hertz)
+	_ = ax.set_xlim(heart_range)
+
+	#Calculate bpm from most common Fourier peak
+	max_index = np.argmax(ys)
+	max_x = xs[max_index]
+	max_y = ys[max_index]
+
+	#Peak Calling 
+	#prominence filters out 'flat' KDEs, 
+	#these result from a noisy signal 
+	peaks, _ = find_peaks(ys, prominence = 0.5)
+
+	#print(xs[peaks])
+	#print(ys[peaks])
+
+	if len(peaks) > 0:
+
+		bpm = max_x * 60
+		bpm = np.around(bpm, decimals=2)
+
+		#Prepare label for plot
+		bpm_label = str(int(bpm)) + " bpm"
+
+		#Label plot with bpm
+		_ = ax.plot(max_x,max_y, 'bo', ms=10)
+		_ = ax.annotate(bpm_label, xy=(max_x, max_y), xytext=(max_x + (max_x * 0.1), max_y + (max_y * 0.01)), arrowprops=dict(facecolor='black', shrink=0.05))
+
+	else:
+		bpm = "NA"
 
 	return(ax, bpm)
-
-#Generate html report from images and videos using jinja2
-#def htmlReport():
-
-#	return(html_report)
 
 #Read all images for a given well
 #>0 returns a 3 channel RGB image. This results in conversion to 8 bit.
@@ -1077,71 +1154,9 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	#Opencv to Scikit image
 	#image = img_as_float(any_opencv_image)
 
-	#Find contours based on thresholded, summed absolute differences
-	contours, _ = cv2.findContours(heart_roi_clean, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-
-	#Filter contours based on which overlaps with the most changeable pixels
-	rows, cols = heart_roi_clean.shape
-	final_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
-	img = np.zeros(shape=[rows, cols], dtype=np.uint8)
-	mask_contours = []
-	regions = 0
-
-#	mask_contours = qc_mask_contours(heart_roi_clean, contours)
-	for i in range(len(contours)):
-
-		#Contour to test
-		test_contour = contours[i]
-
-		rect = cv2.minAreaRect(test_contour)
-
-		#Create blank mask
-		contour_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
-
-		#Calculate overlap with the most changeable pixels i.e. max_opening
-		#Draw and fill-in filtered contours on blank mask (contour has to be in a list)
-		cv2.drawContours(contour_mask, [test_contour], -1, (255), thickness = -1)
-
-		contour_pixels = (contour_mask / 255).sum()
-
-		#Find overlap between contoured area and the N most changeable pixels
-		overlap = np.logical_and(maxima, contour_mask)
-		overlap_pixels = overlap.sum()
-
-		#Calculate ratio between area of intersection and contour area 
-		pixel_ratio = overlap_pixels / contour_pixels
-
-		contour_area =  cv2.contourArea(test_contour)
-	
-		#Calculate minimum area parallelogram that encloses the contoured area
-	        #centre, size, angle = cv2.minAreaRect(test_contour)
-		#(x, y), (width, height), angle = cv2.minAreaRect(test_contour)
-		rect = cv2.minAreaRect(test_contour)
-		_, (l1, l2), _ = rect
-
-		#Take the longer length to be the height
-		if l1 >= l2:
-			height = l1
-			width = l2
-		else:
-			height = l2
-			width = l1
-
-		rect_area = width * height
-
-		#Ratio of contoured area to the area of the minimal-sized rectangle enclosing it.
-		area_ratio = contour_area / rect_area
-
-		#Ratio of width to height
-		aspect_ratio = float(width) / float(height)
-
-		#Take all regions that overlap with the the >=20% of the N most changeable pixels
-		if (overlap_pixels >= (top_pixels * 0.7)) or (pixel_ratio >= 0.1):
-#		if (overlap_pixels >= (top_pixels * 0.5)) or (pixel_ratio >= 0.1):
-
-			mask_contours.append(test_contour)
-			final_mask = cv2.add(final_mask, contour_mask)
-			regions += 1
+	#Find contours of segmented regions and 
+	#filter contours based on area nad overlap with most changeable pixels
+	final_mask, regions = qc_mask_contours(heart_roi_clean)
 
 	#Overlay labelled maxima on filtered mask
 	overlay = color.label2rgb(label_maxima, image = final_mask, alpha=0.7, bg_label=0, bg_color=None, colors=[(1, 0, 0)])
@@ -1273,130 +1288,97 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		times_final, y_final, cs = interpolate_signal(times, y, empty_frames)
 		meanY = np.mean(cs(td))
 
-		#TODO
 		#Signal per pixel
-		pixel_signals = getPixelSignal(masked_frames)
-
-		#Plot Pixel Fourier Transforms
+		pixel_signals = PixelSignal(masked_frames)
+		#Perform Fourier Transform on each pixel in segmented area
 		out_fourier = out_dir + "/pixel_fourier.png"
 		fig, ax = plt.subplots(figsize=(10, 7))
-		ax, highest_freqs = multiplot_signal(pixel_signals, times)
+		ax, highest_freqs = PixelFourier(pixel_signals, times, empty_frames, pixel_num = 1000)
 		plt.savefig(out_fourier)
 		plt.close()
 		
+		#Plot the density of fourier transform global maxima across pixels
 		out_fourier2 = out_dir + "/pixel_rate.png"
 		fig, ax = plt.subplots(1,1,figsize=(10, 7))
-		ax, bpm = plot_PixelFreqs(highest_freqs)
+		ax, bpm_fourier = PixelFreqs(highest_freqs)
 		plt.savefig(out_fourier2)
 		plt.close()
-
-		#QC based on number of peaks and their intensity
-#		peaks, _ = find_peaks(ys, prominence = 1, distance = 5)
-
-		#Peak calling
-#		print(xs)
-#		print(max_x)
-
 
 		#Calculate slope
 		#Presumably should be flat(ish) if good
 		#Or fit line
-		slope, intercept, r_value, p_value, std_err = stats.linregress(td, cs(td))
+#		slope, intercept, r_value, p_value, std_err = stats.linregress(td, cs(td))
 
 		#Median Absolute Deviation across signal
-		mad = stats.median_absolute_deviation(cs(td))
+#		mad = stats.median_absolute_deviation(cs(td))
 
-		#Peak Calling
-		peaks, _ = find_peaks(cs(td), height = np.mean(cs(td)), width = 5, prominence = 1)
+		#Frequently issue with first few data-points
+		to_keep = range(int(len(td) * 0.05),len(td))
+		filtered_td = td[to_keep]
 
+		#Plot sigal in segmented region
 		out_fig = out_dir + "/bpm_trace.png"
 		plt.figure(figsize=(10,2))
-		plt.plot(td, cs(td))
-		plt.plot(td[peaks], cs(td)[peaks], "x")
+		plt.plot(filtered_td, cs(filtered_td))
 		plt.ylabel('Heart intensity (CoV)')
 		plt.xlabel('Time [sec]')
-		plt.hlines(y = np.mean(cs(td)), xmin = td[0], xmax = td[-1], linestyles = "dashed")
+		plt.hlines(y = np.mean(cs(filtered_td)), xmin = td[0], xmax = td[-1], linestyles = "dashed")
 		plt.savefig(out_fig,bbox_inches='tight')
 		plt.close()
 
 		#Filter out if linear regression captures signal trend well
 		#(i.e. if p-value highly significant)
-		if (np.float64(p_value) > np.float_power(10, -8)) or (mad <= 0.02) or (np.absolute(slope) <= 0.002):
+#		if (np.float64(p_value) > np.float_power(10, -8)) or (mad <= 0.02) or (np.absolute(slope) <= 0.002):
 
 			#Detrend and smoothe cubic spline interpolated data 
 			#with Savitzky–Golay filter
-			#norm_cs = detrendSignal(cs, td, window_size = 25)
-			norm_cs = detrendSignal(cs, td, window_size = 21)
+#			norm_cs = detrendSignal(cs, td, window_size = 21)
 
-			out_fig = out_dir + "/bpm_trace.savgol_filter.png"
-			plt.figure(figsize=(10,2))
-			plt.plot(td, norm_cs(td))
-#			plt.plot(td[peaks], cs(td)[peaks], "x")
-			plt.ylabel('Heart intensity (CoV)')
-			plt.xlabel('Time [sec]')
-			plt.hlines(y = np.mean(norm_cs(td)), xmin = td[0], xmax = td[-1], linestyles = "dashed")
-			plt.savefig(out_fig,bbox_inches='tight')
-			plt.close()
-
-			#Heart range in Hz
-			heart_range = (0.5, 5)
+#			out_fig = out_dir + "/bpm_trace.savgol_filter.png"
+#			plt.figure(figsize=(10,2))
+#			plt.plot(td, norm_cs(td))
+#			plt.ylabel('Normalised Heart Signal')
+#			plt.xlabel('Time [sec]')
+#			plt.hlines(y = np.mean(norm_cs(td)), xmin = td[0], xmax = td[-1], linestyles = "dashed")
+#			plt.savefig(out_fig,bbox_inches='tight')
+#			plt.close()
 
                         #Remove first 2.5% of interpolated, detrended data-points
                         #Frequently issue with first few data-points
-			#to_keep = range(int(len(td) * 0.025),len(td))
-			to_keep = range(int(len(td) * 0.05),len(td))
-			filtered_td = td[to_keep]
+#			to_keep = range(int(len(td) * 0.05),len(td))
+#			filtered_td = td[to_keep]
 
-			#Perform Fourier Analysis 
-			psd, freqs, peak, bpm_fourier = fourierHR(norm_cs, filtered_td, heart_range)
+			#Perform Fourier Analysis on Region
+#			psd, freqs, peak, bpm_fourier = fourierHR(norm_cs, filtered_td, heart_range)
 	
-			if bpm_fourier is not None:	
-				#Round heart rate
-				bpm_fourier = np.around(bpm_fourier, decimals=2)
+			#Round heart rate
+#			if bpm_fourier is not None:
+#				bpm_fourier = np.around(bpm_fourier, decimals=2)
 
 			#Plot full. one-sided Fourier Transform 
-			ax = plotFourier(psd = psd, freqs = freqs, peak = None, bpm = bpm_fourier, heart_range = None, figure_loc = 211)
-			ax.set_title("Power spectral density of HRV")
+#			ax = plotFourier(psd = psd, freqs = freqs, peak = None, bpm = bpm_fourier, heart_range = None, figure_loc = 211)
+#			ax.set_title("Power spectral density of HRV")
 
 			#Plot one-sided Fourier within specified range
-			ax = plotFourier(psd = psd, freqs = freqs, peak = peak, bpm = bpm_fourier, heart_range = heart_range, figure_loc = 212)
-			plt.xlabel('Frequency (Hz)')
+#			ax = plotFourier(psd = psd, freqs = freqs, peak = peak, bpm = bpm_fourier, heart_range = heart_range, figure_loc = 212)
+#			plt.xlabel('Frequency (Hz)')
 		
-			out_fourier = out_dir + "/bpm_power_spectra.fourier.png"
-			plt.savefig(out_fourier)#, bbox_inches='tight')
-			plt.close()
+#			out_fourier = out_dir + "/bpm_power_spectra.fourier.png"
+#			plt.savefig(out_fourier)#, bbox_inches='tight')
+#			plt.close()
 
-			#Write bpm estimates to file
-			out_file = out_dir + "/heart_rate.txt"
-			with open(out_file, 'w') as output:
+#check heartrate was calculated
+#otherwise create variable and set to NA
+if "bpm_fourier" not in locals():
+	bpm_fourier = "NA"
+
+#Write bpm estimate to file
+out_file = out_dir + "/heart_rate.txt"
+with open(out_file, 'w') as output:
 	
-				output.write("well\twell_id\tbpm\n")
-				output.write(well_number + "\t" + well + "\t" +  str(bpm_fourier) + "\n")
+	output.write("well\twell_id\tbpm\n")
+	output.write(well_number + "\t" + well + "\t" +  str(bpm_fourier) + "\n")
 
-		else:
-			out_file = out_dir + "/heart_rate.txt"
-			#Write bpm to file
-			with open(out_file, 'w') as output:
-
-				output.write("well\twell_id\tbpm\tnote\n")
-				output.write(well_number + "\t" + well + "\tNA\tsignal_issue\n")
-
-	else:
-		out_file = out_dir + "/heart_rate.txt"
-		#Write bpm to file
-		with open(out_file, 'w') as output:
-
-			output.write("well\twell_id\tbpm\tnote\n")
-			output.write(well_number + "\t" + well + "\tNA\tno_heart_roi\n")
-
-
-else:
-	out_file = out_dir + "/heart_rate.txt"
-	#Write bpm to file
-	with open(out_file, 'w') as output:
-
-		output.write("well\twell_id\tbpm\tnote\n")
-		output.write(well_number + "\t" + well + "\tNA\tempty_frames\n")
 
 #Welch’s method [R145] computes an estimate of the power spectral density by dividing the data into overlapping segments, computing a modified periodogram for each segment and averaging the periodograms.
 #https://docs.scipy.org/doc/scipy-0.14.0/reference/generated/scipy.signal.welch.html
