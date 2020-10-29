@@ -862,6 +862,7 @@ imgs = {}
 imgs_meta = {}  
 sizes = {}
 crop_params = {}
+raw_frames = []
 for frame in well_frames:
 
 	fname = os.path.basename(frame)
@@ -928,7 +929,6 @@ for frame in well_frames:
 		#Read image in colour
 		#8-bit, 3 channel image
 		img = cv2.imread(frame,1)
-		imgs[name] = img
 
 		#Crop if necessary based on centre of embryo
 		#Detects embryo with Hough Circle Detection
@@ -950,7 +950,10 @@ for frame in well_frames:
 
 	#if image empty
 	else:
-		imgs[name] = None
+		img = None
+
+	raw_frames.append(img)
+	imgs[name] = img
 
 	#Make dict based on the file data fields
 	try:
@@ -976,8 +979,9 @@ except OSError as e:
 	if e.errno != errno.EEXIST:
 		raise
 
-#Save original frame with embryo highlighted with a circle
-img_out = img.copy()
+#Save a frame image with the embryo highlighted with a circle
+first = next(x for x, frame in enumerate(raw_frames) if frame is not None)
+img_out = raw_frames[first].copy()
 
 #Crop if a tiff
 if crop is True:
