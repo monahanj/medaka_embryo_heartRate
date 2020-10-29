@@ -169,6 +169,9 @@ def detectEmbryo(frame):
 #Normalise across frames to harmonise intensities (& possibly remove flickering)
 def normVideo(frames):
 
+	# Satrt at first non-empty frame
+#	first_frame = next(x for x, frame in enumerate(frames) if frame is not None)
+#	for i in range(first_frame, len(frames)):
 	for i in range(len(frames)):
 
 		frame = frames[i]
@@ -178,10 +181,12 @@ def normVideo(frames):
 			#Convert RGB to greyscale
 			frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-			if i == 0:
-				filtered_frames = np.asarray(frame)
-			else:
+			#Add to frame stack
+			try:
 				filtered_frames = np.dstack((filtered_frames, frame))
+			#Initiate as array if doesn't exist
+			except UnboundLocalError:
+				filtered_frames = np.asarray(frame) 
 
 	norm_frames = [] 
 	##Divide by max to try and remove flickering between frames
