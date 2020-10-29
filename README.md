@@ -1,5 +1,10 @@
+Medaka-heart-rate-analysis
+==========================
+
 Python script segments betaing heart from videos of medaka fish embryos.
+
 Then performs Fourier Transform on each pixel in segmented area.
+
 Kernel Density Estimation determines the heart rate from the most common Fourier peak.
 
 usage: segment_heart.py [-h] -i INDIR [-t FRAME_FORMAT] -w WELL [-l LOOP] [--crop] [--no-crop] [-f FPS] -o OUT
