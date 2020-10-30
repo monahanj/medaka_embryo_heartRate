@@ -7,11 +7,10 @@ Medaka heart rate analysis
 
 3. Kernel Density Estimation determines the heart rate from the most common Fourier peak.
 
-usage: 
 ```
-segment_heart.py [-h] -i INDIR [-t FRAME_FORMAT] -w WELL [-l LOOP] [--crop] [--no-crop] [-f FPS] -o OUT
+usage: python segment_heart.py [-h] -i INDIR [-t FRAME_FORMAT] -w WELL [-l LOOP] [--crop] [--no-crop] [-f FPS] -o OUT
 
--i Need to specify directory with tiff or jpeg subdirectory
+-i Need to specify directory with a tiff or jpeg subdirectory
 -w Specify the well e.g. WE00001
 -l specify acquistion loop e.g. LO001
 --crop or --no-crop to specify whether or not frames need to be cropped
@@ -23,8 +22,10 @@ Python script run by the shell script that supplies parameters.
 
 example:
 ```
-python segment_heart.py -i test_data -w WE00001 -l LO001 --no-crop -o analyses/test_data
+python segment_heart.py -i test_data -w WE00001 -l LO001 --no-crop -t jpeg -o analyses/test_data
 ```
+
+This would analyse `jpegs` from well `WE00001`, loop `LO001`.
 
 Necessary to create an "environment" using .yml file e.g. with Conda https://docs.conda.io/en/latest/ 
 This installs all the python dependencies.
