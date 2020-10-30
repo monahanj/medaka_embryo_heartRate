@@ -1,0 +1,1398 @@
+#!/usr/bin/env python3
+
+import argparse
+import pandas as pd
+import os
+import glob2
+import errno
+
+import random
+
+import numpy as np
+import cv2
+
+import skimage
+from skimage.util import img_as_ubyte, img_as_float
+from skimage.filters import threshold_triangle, threshold_yen 
+from skimage.measure import label
+from skimage.metrics import structural_similarity
+from skimage import color, feature
+
+import scipy
+from scipy import stats
+from scipy.stats import gaussian_kde
+from scipy import signal
+from scipy.signal import find_peaks, peak_prominences, welch, savgol_filter
+from scipy.interpolate import CubicSpline
+
+import matplotlib
+matplotlib.use('Agg')
+from matplotlib import pyplot as plt
+import seaborn as sns
+
+from collections import Counter
+
+import warnings
+warnings.filterwarnings("ignore", category=SyntaxWarning)
+
+np.set_printoptions(threshold=np.inf)
+
+#Go through frames in stack to determine changes between seqeuential frames (i.e. the heart beat)
+#Determine absolute differences between current and previous frame
+#Use this to determine range of movement (i.e. the heart region)
+
+parser = argparse.ArgumentParser(description='Read in medaka heart video frames')
+parser.add_argument('-i','--indir', action="store", dest='indir', help='Directory containing frames', default=False, required = True)
+parser.add_argument('-t','--format', action="store", dest='frame_format', help='Frame format', default='tiff', required = False)
+parser.add_argument('-w','--well', action="store", dest='well', help='Well Id', default=False, required = True)
+parser.add_argument('-l','--loop', action="store", dest='loop', help='Well frame acquistion loop', default=None, required = False)
+parser.add_argument('--crop', dest='crop', action='store_true')
+parser.add_argument('--no-crop', dest='crop', action='store_false')
+parser.add_argument('-f','--fps', action="store", dest='fps', help='Frames per second', default=False, required = False)
+parser.add_argument('-o','--out', action="store", dest='out', help='Output', default=False, required = True)
+parser.set_defaults(feature=True)
+args = parser.parse_args()
+
+indir = args.indir
+frame_format = args.frame_format
+well_number = args.well
+loop = args.loop
+crop = args.crop
+out_dir = args.out
+
+#All images in subdirs, one level below if tiff, 2 below if jpeg
+#If multiple loops
+if args.loop:
+
+	loop = args.loop
+
+	#If tiff
+	if frame_format == "tiff":
+
+		well_frames = glob2.glob(indir + '/*Tif*/*' + well_number + '*.tif') + glob2.glob(indir + '/*Tif*/*' + well_number + '*.tiff')
+		well_frames = [fname for fname in well_frames if loop in fname]
+
+	#If jpeg
+	elif frame_format == "jpeg":
+		
+		well_frames = glob2.glob(indir + '/*Jpeg*/*' + well_number + '*.jpeg') + glob2.glob(indir + '/*Jpeg*/*' + well_number + '*.jpg')
+		well_frames = [fname for fname in well_frames if loop in fname]
+
+else:
+	#If tiff
+	if frame_format == "tiff":
+		well_frames = glob2.glob(indir + '/*Tif*/*' + well_number + '*.tif') + glob2.glob(indir + '/*/*' + well_number + '*.tiff')
+
+	#If jpeg
+	elif frame_format == "jpeg":
+		well_frames = glob2.glob(indir + '/*Jpeg*/*' + well_number + '*.jpg') + glob2.glob(indir + '/*Jpeg*/*' + well_number + '*.jpeg')   
+
+# Improve contrast with CLAHE (Contrast Limited Adaptive Histogram Equalization)
+#https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/py_histogram_equalization.html#histogram-equalization
+# create a CLAHE object (Arguments are optional).
+clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+
+#Kernel for image smoothing
+kernel = np.ones((5,5),np.uint8)
+
+##########################
+##	Functions	##
+##########################
+#Detect embryo in image based on Hough Circle Detection
+def detectEmbryo(frame):
+
+	#Find circle i.e. the embryo in the yolk sac 
+	img_grey = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
+
+	#Edge detection
+	edges = cv2.Canny(img_grey, 100, 200)
+
+
+	circles = cv2.HoughCircles(edges, cv2.HOUGH_GRADIENT, 1, 150, param1=50, param2=30)
+
+	#If fails to detect embryo following edge detection, 
+	#try with the original image 
+	if circles is None:
+		circles = cv2.HoughCircles(img_grey, cv2.HOUGH_GRADIENT, 1, 150, param1=50, param2=30)
+
+	if circles is not None:
+
+		#Sort detected circles
+		circles = sorted(circles[0],key=lambda x:x[2],reverse=True)
+		#Only take largest circle to be embryo
+		circle = np.uint16(np.around(circles[0]))
+
+		#Circle coords
+		centre_x = circle[0]
+		centre_y = circle[1]
+		radius = circle[2]
+		x1 = centre_x - radius
+		x2 = centre_x + radius
+		y1 = centre_y - radius
+		y2 = centre_y + radius
+		
+		#Round coords
+		x1_test = 100 * round(x1 / 100)
+		x2_test = 100 * round(x2 / 100)
+		y1_test = 100 * round(y1 / 100)
+		y2_test = 100 * round(y2 / 100)
+
+		#If rounded figures are greater than x1 or y1, take 50 off it 
+		if x1_test > x1:
+			x1 = x1_test - 50 
+		else:
+			x1 = x1_test
+
+		if y1_test > y1:
+			y1 = y1_test - 50 
+		else:
+			y1 = y1_test
+
+		#If rounded figures are less than x2 or y2, add 50 
+		if x2_test < x2:
+			x2 = x2_test + 50 
+		else:
+			x2 = x2_test
+
+		if y2_test < y2:
+			y2 = y2_test + 50 
+		else:
+			y2 = y2_test
+
+		x1 = int(x1)
+		y1 = int(y1)
+		x2 = int(x2)
+		y2 = int(y2)
+
+	return(circle, x1, y1, x2, y2)
+
+#Normalise across frames to harmonise intensities (& possibly remove flickering)
+def normVideo(frames):
+
+	# Satrt at first non-empty frame
+#	first_frame = next(x for x, frame in enumerate(frames) if frame is not None)
+#	for i in range(first_frame, len(frames)):
+	for i in range(len(frames)):
+
+		frame = frames[i]
+
+		if frame is not None:
+
+			#Convert RGB to greyscale
+			frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+			#Add to frame stack
+			try:
+				filtered_frames = np.dstack((filtered_frames, frame))
+			#Initiate as array if doesn't exist
+			except UnboundLocalError:
+				filtered_frames = np.asarray(frame) 
+
+	norm_frames = [] 
+	##Divide by max to try and remove flickering between frames
+	for i in range(len(frames)):
+
+		frame = frames[i]
+
+		if frame is not None:
+
+			#Convert RGB to greyscale
+			frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+			norm_frame = np.uint8(frame / np.max(filtered_frames) * 255)
+
+			#Convert scaled greyscale back to RGB
+			norm_frame = cv2.cvtColor(norm_frame, cv2.COLOR_GRAY2BGR)
+
+		#If empty frame
+		else:
+			norm_frame = None
+
+		norm_frames.append(norm_frame)
+
+	return(norm_frames)
+
+#Pre-process frame
+def processFrame(frame):
+	"""Image pre-processing and illumination normalisation"""
+
+	#Convert RGB to LAB colour
+	lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+
+	#Split the LAB image into different channels
+	l, a, b = cv2.split(lab)
+
+	# Improve contrast with CLAHE (Contrast Limited Adaptive Histogram Equalization)
+	#Apply CLAHE to L-channel
+	cl = clahe.apply(l)
+
+	#Merge the CLAHE enhanced L-channel with the A and B channel
+	limg = cv2.merge((cl,a,b))
+
+	#Convert to greyscale
+	frame_grey = cl 
+
+	#Convert CLAHE-normalised greyscale frame back to BGR
+	out_frame = cv2.cvtColor(frame_grey, cv2.COLOR_GRAY2BGR)
+
+	#Blur the CLAHE frame
+	#Blurring kernel numbers must be odd integers
+	blurred_frame = cv2.GaussianBlur(frame_grey, (9, 9), 0)
+
+	return out_frame, frame_grey, blurred_frame
+ 
+def maskFrame(frame, mask):
+
+	"""Add constant value in green channel to region of frame from the mask.""" 
+
+	# split source frame into B,G,R channels
+	b,g,r = cv2.split(frame)
+
+	# add a constant to G (green) channel to highlight the masked area
+	g = cv2.add(g, 50, dst = g, mask = mask, dtype = cv2.CV_8U)
+	masked_frame = cv2.merge((b, g, r))
+
+	return masked_frame
+
+def filterMask(mask, min_area = 300):
+
+	#Contour mask 
+	contours, hierarchy = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+
+	#Filter contours based on their area
+	filtered_contours = []
+	for i in range(len(contours)):
+		contour = contours[i]
+
+		#Filter contours by their area
+		if cv2.contourArea(contour) >= min_area:
+			filtered_contours.append(contour)
+
+	contours = filtered_contours
+
+	#Create blank mask
+	rows, cols = mask.shape
+	filtered_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
+
+	#Draw and fill-in filtered contours on blank mask
+	cv2.drawContours(filtered_mask, contours, -1, 255, thickness = -1)
+
+	return filtered_mask
+
+#Differences between two frames
+def diffFrame(frame, frame2_blur, frame1_blur, min_area = 300):
+	"""Calculate the abs diff between 2 frames and returns frame2 masked with the filtered differences."""
+
+	#Image Structural similarity
+#	_ , diff = structural_similarity(frame2_blur, frame1_blur, full = True)
+	#invert colour
+#	diff = diff * -1
+
+	#Absolute difference between frames
+	diff = cv2.absdiff(frame2_blur, frame1_blur)
+
+	#Triangle thresholding on differences
+	triangle = threshold_triangle(diff)
+	thresh = diff > triangle
+	thresh = thresh.astype(np.uint8)
+
+	#Opening to remove noise
+	thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+
+	#Find contours in mask and filter them based on their area
+	mask = filterMask(mask = thresh, min_area = min_area)
+
+	#Mask frame
+	masked_frame = maskFrame(frame, mask)
+
+	#Return the masked frame, the filtered mask and the absolute differences for the 2 frames
+	#return masked_frame, mask, thresh
+	return masked_frame, thresh
+
+# Forward or reverse rolling window of width w with step size ws
+def rolling_diff(index, frames, win_size = 5, direction = "forward", min_area = 300):
+	"""
+	Implement rolling window 
+	* win_size INT
+		Window size (default = 5)
+	"""
+
+	if direction == "forward":
+		
+		if (index + win_size) > len(frames):
+			window_indices = list(range(index, len(frames)))
+		else:
+			window_indices = list(range(index, index + win_size))
+
+		frame0 = frames[window_indices[0]]
+		_, _, old_blur = processFrame(frame0)
+
+		#Determine absolute differences between current and previous frame
+		#Frame[j-1] vs. frame[j]... 
+
+		#Generate blank images for masking
+		rows, cols, _ = frame0.shape
+		abs_diffs = np.zeros(shape=[rows, cols], dtype=np.uint8)
+
+		for i in window_indices[1:]:
+
+			frame = frames[i]
+
+			if frame is not None:
+				_, _, frame_blur = processFrame(frame)
+				_, triangle_thresh = diffFrame(frame, frame_blur, old_blur)
+				abs_diffs = cv2.add(abs_diffs, triangle_thresh)
+
+	elif direction == "reverse":
+
+		if index >= win_size:
+			window_indices = list(range(index, index - win_size, -1))[::-1]
+		else:
+			window_indices = list(range(0, index + 1))
+
+		frame = frames[window_indices[-1]]
+		_, _, frame_blur = processFrame(frame)
+
+		#Determine absolute differences between current and previous frame
+		#Frame[i] vs frame[i - 1] .... [(i - 3]
+
+		#Generate blank images for masking
+		rows, cols, _ = frame.shape
+		abs_diffs = np.zeros(shape=[rows, cols], dtype=np.uint8)
+
+		for i in window_indices[:-1]:
+
+			frame0 = frames[i]
+
+			if frame0 is not None:
+
+				_, _, old_blur = processFrame(frame0)
+
+				_, triangle_thresh = diffFrame(frame, frame_blur, old_blur)
+				abs_diffs = cv2.add(abs_diffs, triangle_thresh)
+
+	#Filter mask by area
+	#Opening to remove noise
+	#thresh = cv2.morphologyEx(abs_diffs, cv2.MORPH_OPEN, kernel)
+	thresh = cv2.erode(abs_diffs,(7,7), iterations = 3)
+
+	#Filter based on their area
+	thresh = filterMask(mask = thresh, min_area = min_area)
+
+	#Mask frame
+	masked_frame = maskFrame(frame, thresh)
+
+	return(masked_frame, abs_diffs)
+
+#Generate figure highlighting the probable heart region
+def heartQC_plot(ax, f0_grey, heart_roi,heart_roi_clean,label_maxima, figsize=(15, 15)):
+
+	"""
+	Generate figure to QC heart segmentation
+	"""
+
+	#First frame
+	ax[0, 0].imshow(f0_grey,cmap='gray')
+	ax[0, 0].set_title('Embryo',fontsize=10)
+	ax[0, 0].axis('off')
+
+	#Summed Absolute Difference between sequential frames
+	ax[0, 1].imshow(heart_roi)
+	ax[0, 1].set_title('Summed Absolute\nDifferences', fontsize=10)
+	ax[0, 1].axis('off')
+
+	#Thresholded Differences
+	ax[1, 0].imshow(heart_roi_clean)
+	ax[1, 0].set_title('Thresholded Absolute\nDifferences', fontsize=10)
+	ax[1, 0].axis('off')
+
+	#Overlap between filtered RoI mask and pixel maxima
+	ax[1, 1].imshow(overlay)
+	ax[1, 1].set_title('RoI overlap with maxima', fontsize=10)
+	ax[1, 1].axis('off')
+
+	return(ax)
+
+def qc_mask_contours(heart_roi):
+
+	#Find contours based on thresholded, summed absolute differences
+	contours, _ = cv2.findContours(heart_roi, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+
+	#Filter contours based on which overlaps with the most changeable pixels
+	rows, cols = heart_roi.shape
+	final_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
+	img = np.zeros(shape=[rows, cols], dtype=np.uint8)
+	regions = 0
+
+	for i in range(len(contours)):
+
+		#Contour to test
+		test_contour = contours[i]
+
+		#Create blank mask
+		contour_mask = np.zeros(shape=[rows, cols], dtype=np.uint8)
+
+		#Calculate overlap with the most changeable pixels i.e. max_opening
+		#Draw and fill-in filtered contours on blank mask (contour has to be in a list)
+		cv2.drawContours(contour_mask, [test_contour], -1, (255), thickness = -1)
+
+		contour_pixels = (contour_mask / 255).sum()
+
+		#Find overlap between contoured area and the N most changeable pixels
+		overlap = np.logical_and(maxima, contour_mask)
+		overlap_pixels = overlap.sum()
+
+		#Calculate ratio between area of intersection and contour area 
+		pixel_ratio = overlap_pixels / contour_pixels
+
+#		contour_area =  cv2.contourArea(test_contour)
+	
+		#Calculate minimum area parallelogram that encloses the contoured area
+	        #centre, size, angle = cv2.minAreaRect(test_contour)
+		#(x, y), (width, height), angle = cv2.minAreaRect(test_contour)
+#		rect = cv2.minAreaRect(test_contour)
+#		_, (l1, l2), _ = rect
+
+		#Take the longer length to be the height
+#		if l1 >= l2:
+#			height = l1
+#			width = l2
+#		else:
+#			height = l2
+#			width = l1
+
+#		rect_area = width * height
+
+		#Ratio of contoured area to the area of the minimal-sized rectangle enclosing it.
+#		area_ratio = contour_area / rect_area
+
+		#Ratio of width to height
+#		aspect_ratio = float(width) / float(height)
+
+		#Take all regions that overlap with 80%+ of the 250 most changeable pixels or 
+		#those in which these pixels comprise at least 5% of the pixels in the contoured region
+		if (overlap_pixels >= (top_pixels * 0.8)) or (pixel_ratio >= 0.05):
+
+			final_mask = cv2.add(final_mask, contour_mask)
+			regions += 1
+
+	return(final_mask, regions)
+
+#Detect extreme outliers and filter them out
+#Outliers due to e.g. sudden movement of whole embryo or flickering light 
+def iqrFilter(times, signal):
+	
+	#Calculate interquartile range from signal 
+	q3, q1 = np.percentile(signal, [75 ,25])
+	iqr = q3 - q1
+
+	#Filter signal based on IQR
+	iqr_upper = q3 + (iqr * 1.5)
+	iqr_lower = q1 - (iqr * 1.5)
+
+	passed = (signal > iqr_lower) & (signal < iqr_upper)
+	filtered_times = times[passed]
+	filtered_signal = signal[passed]
+
+	return(filtered_times, filtered_signal)
+
+#Interpolate pixel or regional signal, filtering if necessary
+def interpolate_signal(times, y, empty_frames):
+
+	#No filtering needed for interpolation if no empty frames
+	if len(empty_frames) == 0:
+
+		#Remove any linear trends
+		detrended = signal.detrend(y)
+
+		#Filter signal with IQR 
+		times_final, y_final = iqrFilter(times, detrended)
+
+	#Filter out missing signal values before interpolation
+	else:
+
+		#Remove NaN values from signal and time domain for interpolation
+		y_filtered = y.copy()
+		y_filtered = np.delete(y_filtered, empty_frames)
+		times_filtered = times.copy()
+		times_filtered = np.delete(times_filtered, empty_frames)
+
+		#Remove any linear trends
+		detrended = signal.detrend(y_filtered)
+
+		#Filter signal with IQR 
+		times_final, y_final = iqrFilter(times_filtered, detrended)
+
+	#Perform cubic spline interpolation to calculate in missing values
+	cs = CubicSpline(times_final, y_final)
+
+	return(times_final, y_final, cs)
+
+
+#Detrend heart signal and smoothe
+def detrendSignal(interpolated_signal, time_domain, window_size = 15):
+	
+	"""
+	Use Savitzky–Golay convolution filter to smoothe time-series data.
+	Fits successive sub-sets of adjacent data points with a low-degree polynomial using linear least squares.
+	Increases the precision of the data without distorting the signal tendency.
+	Sav-Gol filter AKA LOESS (locally estimated scatterplot smoothing) 
+	* interpolated_signal
+		Interpolated raw signal intensities. 
+	* time_domain 
+		Time domain generated from data interpolation.
+	* window_size INT
+		Odd number specifying window size for Savitzky–Golay filter.
+	"""
+	#Savitzky–Golay filter to smooth signal
+	#Window size must be odd integer
+	data_detrended = savgol_filter(interpolated_signal(time_domain), window_size, 3)
+
+	#Normalise Signal
+	normalised_signal = data_detrended / data_detrended.std() 
+
+	#Generate new Cubic Spline based on smoothed data
+	norm_cs = CubicSpline(time_domain, normalised_signal)
+
+	return(norm_cs)
+
+#Calculate Median Absolute Deviation 
+#for a given numeric vector
+def MAD(numeric_vector):
+
+	median = np.median(numeric_vector)
+	diff = abs(numeric_vector - median)
+	med_abs_deviation = np.median(diff)
+
+	return med_abs_deviation
+
+# Forward or reverse rolling window W with step size Ws
+def rolling_window(signal, win_size = 20, win_step = 5, direction = "forward"):
+	"""
+	Implement rlling window over Nanopore read signal intensities (mean or median)
+	* signal FLOAT
+		 numeric vector
+	* win_size INT
+		Window size (default = 20)
+	* win_step INT
+		Window step size (default = 5)
+	* direction STR
+		Direction of rolling window: forward = start to end /low to high indices, reverse = end to start/ high to low indices
+	"""
+
+	n_signal = len(signal)
+	n_windows_signal = ((n_signal-win_size)//win_step)+1
+	windows = np.empty(dtype=signal.dtype, shape=n_windows_signal)
+	window_indices = []
+
+
+	# Iterate window by window over the signal array and compute the median/mean for each
+	for i, j in enumerate (np.arange (0, n_signal-win_size+1, win_step)):
+
+		#evaluate string in smooth as numpy function (median or mean)
+		if direction == "forward":
+			index = j
+			indices = list(range(index, index + win_size))
+			window_indices.append(indices)
+			#windows[i] = getattr(np,func)(signal[index : index + win_size])
+			windows[i] = MAD(signal[index : index + win_size])
+
+		elif direction == "reverse":
+			index = n_signal -j
+			indices = list(range(index -win_size, index))[::-1]
+			window_indices.append(indices)
+			#windows[i] = getattr(np,func)(signal[index -win_size : index][::-1])
+			windows[i] = MAD(signal[index -win_size : index][::-1])
+
+	return(windows, window_indices)
+
+#Perform a Fourier Transform on interpolated signal from heart region
+def fourierHR(interpolated_signal, time_domain, heart_range = (0.5, 5)):
+
+	"""
+	When 3 or less peaks detected is Fourier, 
+	the true heart-rate is usually the first one.
+	The second peak may be higher in some circumstances 
+	if BOTH chambers were segmented.
+	Fourier seems to detect frequencies corresponding to 
+	1 beat, 2 beats and/or 3 beats in this situation. 
+	"""
+
+	#Fast fourier transform
+	fourier = np.fft.fft(interpolated_signal(time_domain))
+	# Power Spectral Density
+	psd = np.abs(fourier) ** 2
+
+	N = interpolated_signal(time_domain).size
+	timestep =  np.mean(np.diff(time_domain))
+	freqs = np.fft.fftfreq(N, d=timestep)
+
+	#one-sided Fourier spectra
+	psd = psd[freqs > 0]
+	freqs = freqs[freqs > 0]
+
+	#Calculate ylims for xrange 0.5 to 5 Hz
+	heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))[0]
+
+	#Peak Calling on Fourier Transform data
+	peaks, _ = find_peaks(psd, prominence = 1, distance = 5)
+
+	#Filter out peaks lower than 1
+	peaks = peaks[psd[peaks] >= 5000] #for detrended and interpolated
+
+	n_peaks = len(peaks)
+	if n_peaks > 0:
+		#Determine the peak within the heart range
+		max_peak = max(psd[peaks])
+
+		#Filter peaks based on ratio to largest peak
+		filtered_peaks = peaks[psd[peaks] >= (max_peak * 0.25)]
+
+		#Calculate heart rate in beats per minute (bpm) from the results of the Fourier Analysis
+		n_filtered = len(filtered_peaks)
+		if n_filtered > 0:
+
+			#Find overlap and sort
+			beat_indices = list(set(filtered_peaks) & set(heart_indices))
+			beat_indices.sort() 
+
+			beat_psd = psd[beat_indices]
+			beat_freqs = freqs[beat_indices]
+
+			#If only one peak
+			if len(beat_indices) == 1:
+
+				beat_freq = beat_freqs[0] 
+				beat_power = beat_psd[0]
+
+				bpm = beat_freq * 60 
+				peak_coord  = (beat_freq, beat_power)
+
+			#TODO
+			#Need something more sophisticated here
+			#If 4 peaks or less, take the first one 
+			elif 1 < len(beat_indices) < 4:
+				beat_freq = beat_freqs[0]
+				beat_power = beat_psd[0]
+
+				bpm = beat_freq * 60
+				peak_coord  = (beat_freq, beat_power)
+
+	#Create dummy bpm variable if doesn't exist
+	if "bpm" not in locals():
+		bpm = None
+		peak_coord = None
+				
+	return(psd, freqs, peak_coord, bpm)
+
+#Plot Fourier Transform
+def plotFourier(psd, freqs, peak, bpm, heart_range, figure_loc = 211):
+
+	#Prepare label for plot
+	if bpm is not None:
+		bpm_label = "Heart rate = " + str(int(bpm)) + " bpm"
+	else:
+		bpm_label = "Heart rate = NA"
+
+	ax = plt.subplot(figure_loc)
+ 
+	#Plot frequency of Fourier Power Spectra
+	_ = ax.plot(freqs,psd)
+
+	#Plot frequency peak if given
+	if peak is not None:
+		#Put x on freq that correpsonds to heart rate
+		_ = ax.plot(peak[0], peak[1],"x")
+		#Dotted line to peak
+		_ = ax.vlines(x = peak[0], ymin = 0, ymax = peak[1], linestyles = "dashed")
+		_ = ax.hlines(y = peak[1], xmin = 0, xmax = peak[0], linestyles = "dashed")
+		#Annotate with BPM
+		_ = ax.annotate(bpm_label, xy=peak, xytext=(peak[0] + 0.5 , peak[1] + (peak[1] * 0.05)), arrowprops=dict(facecolor='black', shrink=0.05))
+
+	# Only plot within heart range (in Hertz) if necessary
+	if heart_range is not None:
+		_ = ax.set_xlim(heart_range)
+
+	_ = ax.set_ylim(top = max(psd) + (max(psd) * 0.2))
+
+	#Y-axis label
+	_ = ax.set_ylabel('Power Spectra')
+
+	return(ax)
+
+def PixelSignal(grey_frames):
+
+	"""
+		Extract individual pixel signal across all frames
+	"""
+
+	pixel_num = 0
+	pixel_signals = {}
+	rows, cols = grey_frames[0].shape
+	for i in range(rows):
+		for j in range(cols):
+
+			pixel_vals = []
+			for frame in grey_frames:
+				if frame is not None:
+					pixel = frame[i,j]
+					pixel_vals.append(pixel)
+
+				else:
+					pixel_vals.append(np.nan)
+
+			#Filter out masked pixels, 
+			#i.e. those with a sum of zero
+			pixel_sum = np.nansum(pixel_vals)
+			if pixel_sum > 0:
+				pixel_signals[pixel_num] = pixel_vals
+
+			pixel_num += 1
+
+	return(pixel_signals)
+
+#Plot multiple pixel signal intensities on same graph
+def PixelFourier(pixel_signals, times, empty_frames, pixel_num = 1000, heart_range = (0.5, 5)):
+
+	"""
+	Plot multiple pixel signal intensities on same graph
+	* pixel_signals DICT
+		Dictionary of pixel signal intensities
+	"""
+	ax = plt.subplot()
+
+	#Randomly select N pixels in to determine heart-rate from 
+	#Limit to 1000 pixels in interest of speed
+	if len(pixel_signals) > 1000:
+
+		#Set seed
+		random.seed(42)
+
+		#Select 1000 (pseudo-)random pixels
+		selected_pixels = random.sample(list(pixel_signals.keys()), k= 1000)
+	else:
+		selected_pixels = list(pixel_signals.keys())
+
+	highest_freqs = []
+	#Plot signals for selected pixels
+	for pixel in selected_pixels:
+
+		pixel_signal = pixel_signals[pixel]
+
+		#Remove values from empty frames
+		signal_filtered = np.delete(pixel_signal, empty_frames)
+		times_filtered = np.delete(times, empty_frames)
+
+		#Fourier on pixel signal
+		norm = CubicSpline(times_filtered, signal_filtered)
+		psd, freqs, _, _ = fourierHR(norm, times)
+
+		#Determine the peak within the heart range
+		heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))[0]
+
+		#Spectra within heart range
+		heart_psd = psd[heart_indices]
+		heart_freqs = freqs[heart_indices]
+
+		#Index of largest spectrum in heart range
+		index_max = np.argmax(heart_psd)
+		#Corresponding frequency
+		highest_freq = heart_freqs[index_max]
+		highest_freqs.append(highest_freq)
+
+		#Plot frequency of Fourier Power Spectra
+		_ = ax.plot(freqs,psd, color='grey', alpha=0.5)
+
+	# Only plot within heart range (in Hertz)
+	_ = ax.set_xlim(heart_range)
+
+	_ = ax.set_xlabel('Frequency (Hz)')
+	_ = ax.set_ylabel('Power Spectra')
+
+	return(ax, highest_freqs)
+
+def PixelFreqs(frequencies, figsize = (10,7), heart_range = (0.5, 5)):
+
+	sns.set_style('white')
+	ax = plt.subplot()
+
+	#Detect most common Fourier Peak using Kernel Density Estimation (KDE)
+	density = gaussian_kde(frequencies)
+	xs = np.linspace(heart_range[0],heart_range[-1],500)
+	ys = density(xs)
+
+	#Plot KDE 
+	_ = sns.kdeplot(frequencies, ax = ax, fill=True)#, bw_adjust=.5)
+	_ = ax.set_title("Pixel Fourier Transform Maxima")
+	_ = ax.set_xlabel('Frequency (Hz)')
+	_ = ax.set_ylabel('Density')
+	# Only plot within heart range (in Hertz)
+	_ = ax.set_xlim(heart_range)
+
+	#Calculate bpm from most common Fourier peak
+	max_index = np.argmax(ys)
+	max_x = xs[max_index]
+	max_y = ys[max_index]
+
+	#Peak Calling 
+	#prominence filters out 'flat' KDEs, 
+	#these result from a noisy signal 
+	peaks, _ = find_peaks(ys, prominence = 0.5)
+
+	#print(xs[peaks])
+	#print(ys[peaks])
+
+	if len(peaks) > 0:
+
+		bpm = max_x * 60
+		bpm = np.around(bpm, decimals=2)
+
+		#Prepare label for plot
+		bpm_label = str(int(bpm)) + " bpm"
+
+		#Label plot with bpm
+		_ = ax.plot(max_x,max_y, 'bo', ms=10)
+		_ = ax.annotate(bpm_label, xy=(max_x, max_y), xytext=(max_x + (max_x * 0.1), max_y + (max_y * 0.01)), arrowprops=dict(facecolor='black', shrink=0.05))
+
+	else:
+		bpm = "NA"
+
+	return(ax, bpm)
+
+#Read all images for a given well
+#>0 returns a 3 channel RGB image. This results in conversion to 8 bit.
+#0 returns a greyscale image. Also results in conversion to 8 bit.
+#<0 returns the image as is. This will return a 16 bit image.
+imgs = {}
+imgs_meta = {}  
+sizes = {}
+crop_params = {}
+raw_frames = []
+for frame in well_frames:
+
+	fname = os.path.basename(frame)
+	fname = fname.split(".")[0]
+
+	#Well name first part of filename
+	if fname.startswith("WE"):
+
+		fname = fname.split("---")
+		well = fname[0]
+	
+		frame_details = fname[1].split("--")
+
+	#Well can be last field either
+	else:
+		#Strip "-"
+		fname = fname.lstrip("-")
+		fname = fname.split("--")
+		well = fname[-1]
+
+		frame_details = fname[:-1]
+
+	plate_pos = frame_details[0]
+	loop = frame_details[2]
+
+	if frame_format == "tiff":
+
+		#Tiff names....
+		#Extract info from tiff file names and create a pandas df
+		#WE00048---D001--PO01--LO002--CO6--SL037--PX32500--PW0080--IN0010--TM280--X014463--Y038077--Z223252--T0016746390.tif
+		#Or
+		#-H012--PO01--LO001--CO1--SL300--PX32500--PW0100--IN0010--TM280--X113600--Y074400--Z215806--T0001349296--WE00085.tif
+
+		frame_number = frame_details[4]
+		time = frame_details[-1]
+		#Drop 'T' from time stamp
+		time = float(time[1:])
+
+	elif frame_format == "jpeg":
+
+		#Jpeg names....
+		#Extract info from the file names and create a pandas df
+		#WE00001---A001--PO01--LO001--CO6--SL049_00.01.00_00.00.03,692.jpg
+	
+		frame_number_time = frame_details[-1]
+		frame_number = frame_number_time.split("_")[0]
+
+		#Time in milliseconds
+		time = frame.split("_")[-1]
+		#Remove file extension
+		time = time.split(".")[:-1]
+
+		time = "".join(time)
+		#Remove commas
+		time = float(time.replace(",", ""))
+
+	name = (plate_pos, loop, frame_number)
+	frame_details = [plate_pos] + frame_details
+	well_id = (plate_pos, loop)
+
+	#If frame is not empty, read it in
+	if not os.stat(frame).st_size == 0:
+
+		#Read image in colour
+		#8-bit, 3 channel image
+		img = cv2.imread(frame,1)
+
+		#Crop if necessary based on centre of embryo
+		#Detects embryo with Hough Circle Detection
+		if crop is True:
+
+			# cropping parameters
+			circle, x1, y1, x2, y2 = detectEmbryo(img)
+
+			#crop_img = img[y1:y2, x1:x2]
+			crop_size = (x2 - x1) * (y2 - y1)
+			crop_id = (plate_pos, loop, crop_size)
+			crop_params[crop_id] = [x1, y1, x2, y2]
+
+			try:
+				sizes[well_id].append(crop_size)
+	
+			except KeyError:
+				sizes[well_id] = [crop_size]
+
+	#if image empty
+	else:
+		img = None
+
+	raw_frames.append(img)
+	imgs[name] = img
+
+	#Make dict based on the file data fields
+	try:
+		imgs_meta['frame'].append(frame)
+		imgs_meta['well'].append(plate_pos) 
+		imgs_meta['loop'].append(loop) 
+		imgs_meta['frame_number'].append(frame_number) 
+		imgs_meta['time'].append(time)
+
+	except KeyError:
+		imgs_meta['frame'] = [frame]
+		imgs_meta['well'] = [plate_pos] 
+		imgs_meta['loop'] = [loop] 
+		imgs_meta['frame_number'] = [frame_number] 
+		imgs_meta['time'] = [time]
+
+#Add well position to output directory path
+out_dir = out_dir + "_" + plate_pos
+#Make output dir if doesn't exist
+try:
+	os.makedirs(out_dir)
+except OSError as e:
+	if e.errno != errno.EEXIST:
+		raise
+
+#Save a frame image with the embryo highlighted with a circle
+first = next(x for x, frame in enumerate(raw_frames) if frame is not None)
+img_out = raw_frames[first].copy()
+
+#Crop if a tiff
+if crop is True:
+
+	#Uniformly crop image per loop per well based on the circle radii + offset
+	well_crop_params = {}
+	for well_id in sizes.keys():
+
+		size = sizes[well_id]
+		dimension_counts = Counter(size)
+		frame_size, _ = dimension_counts.most_common(1)[0]
+		crop_id = well_id + (frame_size,)
+		well_crop_params[well_id] = crop_params[crop_id]
+
+	# Draw the center of the circle
+	cv2.circle(img_out,(circle[0],circle[1]),2,(0,255,0),3)
+	# Draw the circle
+	cv2.circle(img_out,(circle[0],circle[1]),circle[2],(0,255,0),2)
+
+out_fig = out_dir + "/embryo.original.png"
+plt.imshow(img_out)
+plt.title('Original Frame', fontsize=10)
+plt.axis('off')
+plt.savefig(out_fig,bbox_inches='tight')
+plt.close()
+
+# creating a dataframe from a dictionary 
+imgs_meta = pd.DataFrame(imgs_meta)
+#Sort by well, loop and frame 
+imgs_meta = imgs_meta.sort_values(by=['well','loop','frame_number'], ascending=[True,True,True])
+#Reindex pandas df
+imgs_meta = imgs_meta.reset_index(drop=True)
+
+#Frames per loop
+#('WE00048', 'LO001', 'SL117')
+#('D01', 'LO001', 'SL117')
+sorted_frames = []
+sorted_times = []
+#for index,row in loop_meta.iterrows():
+for index,row in imgs_meta.iterrows():
+
+	#tiff = row['tiff']
+	well = row['well']
+	loop = row['loop']
+	frame_number = row['frame_number']
+	time = row['time']
+	name = (well, loop, frame_number)
+	img = imgs[name]
+
+	sorted_times.append(time)
+
+	well_id = (well, loop)
+
+	#To deal with empty frames
+	if img is not None:
+
+		#Use cropping parameters to uniformly crop frames
+		if crop is True:
+
+			#Well and loop specific parameters for cropping frame
+			#crop_params[crop_id] = [x1, y1, x2, y2]
+			crop_values = well_crop_params[well_id]
+
+			#crop_img = img[y1 : y2, x1: x2]
+			crop_img = img[crop_values[1] : crop_values[3], crop_values[0] : crop_values[2]]
+
+			sorted_frames.append(crop_img)
+
+			height, width, layers = crop_img.shape
+		else:
+			sorted_frames.append(img)
+			height, width, layers = img.shape
+
+		size = (width,height)
+
+	else:
+                sorted_frames.append(None)
+
+#Only process if less than 5% frames are empty
+if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
+
+	#Determine frame rate from time-stamps if unspecified 
+	if args.fps:
+		fps = int(args.fps)
+	else:
+		#total time acquiring frames in seconds
+		timestamp0 = sorted_times[0]
+		timestamp_final = sorted_times[-1]
+	
+		total_time = (timestamp_final - timestamp0) / 1000 
+		fps = int(len(sorted_times) / round(total_time))
+
+	#Normalise intensities across frames by max pixel if tiff images
+	if frame_format == "tiff":
+		norm_frames = normVideo(sorted_frames)
+
+	#jpegs already normalised
+	else:
+		norm_frames = sorted_frames.copy()
+
+	#Write video
+	vid_frames = [frame for frame in norm_frames if frame is not None]
+	fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+	#fourcc = cv2.VideoWriter_fourcc(*'avc1')
+	height, width, layers = vid_frames[0].shape
+	size = (width,height)
+	out_vid = out_dir + "/embryo.mp4"
+	out = cv2.VideoWriter(out_vid,fourcc, fps, size)
+	for i in range(len(vid_frames)):
+		out.write(vid_frames[i])
+	out.release()
+
+	embryo = []
+	#Start from first non-empty frame
+	start_frame = next(x for x, frame in enumerate(norm_frames) if frame is not None)
+	frame0 = norm_frames[start_frame]
+	embryo.append(frame0)
+
+	#Generate blank images for masking
+	rows, cols, _ = frame0.shape
+	heart_roi = np.zeros(shape=[rows, cols], dtype=np.uint8)
+
+	#Process frame0
+	old_cl, old_grey, old_blur = processFrame(frame0)
+	f0_grey = old_grey.copy()
+
+	#Numpy matrix: 
+	#Coord 1 = row(s)
+	#Coord 2 = col(s)
+
+	#Detect heart region (and possibly blood vessels) 
+	#by determining the differences across windows of frames
+	j = start_frame + 1
+	while j < len(norm_frames):
+
+		frame = norm_frames[j]
+
+		if frame is not None:
+
+			masked_frame, triangle_thresh = rolling_diff(j, norm_frames, win_size = 2, direction = "reverse", min_area = 150)
+
+			heart_roi = cv2.add(heart_roi, triangle_thresh)
+			embryo.append(masked_frame)
+
+		else:
+			embryo.append(None)
+		j += 1
+
+	#Get indices of 250 most changeable pixels
+	top_pixels = 250
+	changeable_pixels = np.unravel_index(np.argsort(heart_roi.ravel())[-top_pixels:], heart_roi.shape)
+
+	#Create boolean matrix the same size as the RoI image
+	maxima = np.zeros((heart_roi.shape), dtype=bool)
+
+	#Label pixels based on based on the top changeable pixels
+	maxima[changeable_pixels] = True
+	label_maxima = label(maxima)
+
+	#Perform 'opening' on heat map of absolute differences 
+	#Rounds of erosion and dilation
+	heart_roi_open = cv2.morphologyEx(heart_roi, cv2.MORPH_OPEN, kernel)
+
+	#Threshold heart RoI to generate mask
+	yen = threshold_yen(heart_roi_open)
+	heart_roi_clean = heart_roi_open > yen
+	heart_roi_clean = heart_roi_clean.astype(np.uint8)
+
+	#Filter mask based on area of contours
+	heart_roi_clean = filterMask(mask = heart_roi_clean, min_area = 100)
+
+	#Scikit image to opencv
+	#cv_image = img_as_ubyte(any_skimage_image)
+	#Opencv to Scikit image
+	#image = img_as_float(any_opencv_image)
+
+	#Find contours of segmented regions and 
+	#filter contours based on area nad overlap with most changeable pixels
+	final_mask, regions = qc_mask_contours(heart_roi_clean)
+
+	#Overlay labelled maxima on filtered mask
+	overlay = color.label2rgb(label_maxima, image = final_mask, alpha=0.7, bg_label=0, bg_color=None, colors=[(1, 0, 0)])
+
+        #Generate figure showing with potential heart region highlighted 
+	out_fig = out_dir + "/embryo_heart_roi.png"
+	fig, ax = plt.subplots(2, 2,figsize=(15, 15))
+	ax = heartQC_plot(ax, f0_grey, heart_roi, heart_roi_clean, overlay)
+	plt.savefig(out_fig, bbox_inches='tight')
+	plt.close()
+
+	#Check if heart region was detected, i.e. if sum(masked) > 0
+	#and limit number of possible heart regions to 3 or fewer
+	#if (final_mask.sum() > 0) and (regions <= 3):  
+	if (final_mask.sum() > 0):  
+	
+		mask = final_mask
+
+		#Coefficient of variation
+		cvs = {}
+		times = []
+
+		timestamp0 = sorted_times[0]
+
+		masked_frames = []
+		#Draw contours of heart
+		for i in range(len(embryo)):
+
+			raw_frame = sorted_frames[i]
+			frame = embryo[i]
+
+			if frame is not None:
+
+				masked_data = cv2.bitwise_and(frame, frame, mask=mask)
+				masked_grey = cv2.cvtColor(masked_data, cv2.COLOR_BGR2GRAY)
+
+				#Create vector of the signal within the region of the heart
+				#Flatten array (matrix) into a vector
+				heart_values = np.ndarray.flatten(masked_grey)
+				#Remove zero elements
+				heart_values = heart_values[np.nonzero(heart_values)]
+
+				# Mean signal in region
+				heart_mean = np.mean(heart_values)
+				#Standard deviation for signal in region
+				heart_std = np.std(heart_values)
+				#Coefficient of variation
+				heart_cv =  heart_std / heart_mean
+
+				# split source frame into B,G,R channels
+				b,g,r = cv2.split(frame)
+
+				# add a constant to B (blue) channel to highlight the heart
+				b = cv2.add(b, 100, dst = b, mask = mask, dtype = cv2.CV_8U)
+
+				masked_frame = cv2.merge((b, g, r))
+
+				#################################
+
+			#No signal in heart RoI if the frame is empty
+			else:
+				masked_frame = None
+				masked_grey = None
+				heart_std = np.nan
+				heart_cv = np.nan
+
+			masked_frames.append(masked_grey)
+			embryo[i] = masked_frame
+
+			frame_num = i + 1
+			cvs[frame_num] = heart_cv
+
+			#Calculate time between frames
+			#Time frame 1 = 0 secs
+			if i == 0:
+				time = 0
+				time_elapsed = 0
+
+				if masked_frame is not None:
+
+					#Save first frame with the ROI highlighted
+					out_fig =  out_dir + "/masked_frame.png"
+					cv2.imwrite(out_fig,masked_frame)
+
+			#Time frame i = (frame i - frame i-1) / 1000
+			#Total Time frame i = (frame i - frame 0) / 1000
+			else:
+				timestamp  = sorted_times[i]
+				old_timestamp  = sorted_times[i-1]
+				#Time between frames in seconds
+				time = (timestamp - old_timestamp ) / 1000
+				#Total time elapsed in seconds
+				time_elapsed = (timestamp - timestamp0) / 1000
+
+			times.append(time_elapsed)
+
+		#Write video
+		out_vid = out_dir + "/embryo_changes.mp4"
+		vid_frames = [i for i in embryo if i is not None]
+		height, width, layers = vid_frames[0].shape
+		size = (width,height)
+		out2 = cv2.VideoWriter(out_vid,fourcc, fps, size)
+		for i in range(len(vid_frames)):
+			out2.write(vid_frames[i])
+		out2.release()
+
+		############################
+		#Quality control heart rate estimate
+		############################
+		# Min and max bpm from Jakob paper
+		#Only consider bpms (i.e. frequencies) less than 300 and greater than 60
+		minBPM = 60 # 1 hz
+		maxBPM = 300 # 5 hz
+
+		times = np.asarray(times, dtype=float)
+		y = np.asarray(list(cvs.values()), dtype=float)
+
+		#Get indices of na values
+		na_values = np.isnan(y)
+		empty_frames = [i for i, x in enumerate(na_values) if x]
+
+		frame2frame = 1 / fps
+
+		#Time domain
+		increment = np.mean(np.diff(times)) / 6
+		td = np.arange(times[0], times[-1] + increment, increment)
+
+		#Filter, detrend and interpolate region signal
+		times_final, y_final, cs = interpolate_signal(times, y, empty_frames)
+		meanY = np.mean(cs(td))
+
+		#Signal per pixel
+		pixel_signals = PixelSignal(masked_frames)
+		#Perform Fourier Transform on each pixel in segmented area
+		out_fourier = out_dir + "/pixel_fourier.png"
+		fig, ax = plt.subplots(figsize=(10, 7))
+		ax, highest_freqs = PixelFourier(pixel_signals, times, empty_frames, pixel_num = 1000)
+		plt.savefig(out_fourier)
+		plt.close()
+		
+		#Plot the density of fourier transform global maxima across pixels
+		out_fourier2 = out_dir + "/pixel_rate.png"
+		fig, ax = plt.subplots(1,1,figsize=(10, 7))
+		ax, bpm_fourier = PixelFreqs(highest_freqs)
+		plt.savefig(out_fourier2)
+		plt.close()
+
+		#Calculate slope
+		#Presumably should be flat(ish) if good
+		#Or fit line
+#		slope, intercept, r_value, p_value, std_err = stats.linregress(td, cs(td))
+
+		#Median Absolute Deviation across signal
+#		mad = stats.median_absolute_deviation(cs(td))
+
+		#Frequently issue with first few data-points
+		to_keep = range(int(len(td) * 0.05),len(td))
+		filtered_td = td[to_keep]
+
+		#Plot sigal in segmented region
+		out_fig = out_dir + "/bpm_trace.png"
+		plt.figure(figsize=(10,2))
+		plt.plot(filtered_td, cs(filtered_td))
+		plt.ylabel('Heart intensity (CoV)')
+		plt.xlabel('Time [sec]')
+		plt.hlines(y = np.mean(cs(filtered_td)), xmin = td[0], xmax = td[-1], linestyles = "dashed")
+		plt.savefig(out_fig,bbox_inches='tight')
+		plt.close()
+
+		#Filter out if linear regression captures signal trend well
+		#(i.e. if p-value highly significant)
+#		if (np.float64(p_value) > np.float_power(10, -8)) or (mad <= 0.02) or (np.absolute(slope) <= 0.002):
+
+			#Detrend and smoothe cubic spline interpolated data 
+			#with Savitzky–Golay filter
+#			norm_cs = detrendSignal(cs, td, window_size = 21)
+
+#			out_fig = out_dir + "/bpm_trace.savgol_filter.png"
+#			plt.figure(figsize=(10,2))
+#			plt.plot(td, norm_cs(td))
+#			plt.ylabel('Normalised Heart Signal')
+#			plt.xlabel('Time [sec]')
+#			plt.hlines(y = np.mean(norm_cs(td)), xmin = td[0], xmax = td[-1], linestyles = "dashed")
+#			plt.savefig(out_fig,bbox_inches='tight')
+#			plt.close()
+
+                        #Remove first 2.5% of interpolated, detrended data-points
+                        #Frequently issue with first few data-points
+#			to_keep = range(int(len(td) * 0.05),len(td))
+#			filtered_td = td[to_keep]
+
+			#Perform Fourier Analysis on Region
+#			psd, freqs, peak, bpm_fourier = fourierHR(norm_cs, filtered_td, heart_range)
+	
+			#Round heart rate
+#			if bpm_fourier is not None:
+#				bpm_fourier = np.around(bpm_fourier, decimals=2)
+
+			#Plot full. one-sided Fourier Transform 
+#			ax = plotFourier(psd = psd, freqs = freqs, peak = None, bpm = bpm_fourier, heart_range = None, figure_loc = 211)
+#			ax.set_title("Power spectral density of HRV")
+
+			#Plot one-sided Fourier within specified range
+#			ax = plotFourier(psd = psd, freqs = freqs, peak = peak, bpm = bpm_fourier, heart_range = heart_range, figure_loc = 212)
+#			plt.xlabel('Frequency (Hz)')
+		
+#			out_fourier = out_dir + "/bpm_power_spectra.fourier.png"
+#			plt.savefig(out_fourier)#, bbox_inches='tight')
+#			plt.close()
+
+#check heartrate was calculated
+#otherwise create variable and set to NA
+if "bpm_fourier" not in locals():
+	bpm_fourier = "NA"
+
+#Write bpm estimate to file
+out_file = out_dir + "/heart_rate.txt"
+with open(out_file, 'w') as output:
+	
+	output.write("well\twell_id\tbpm\n")
+	output.write(well_number + "\t" + well + "\t" +  str(bpm_fourier) + "\n")
+
+
+#Welch’s method [R145] computes an estimate of the power spectral density by dividing the data into overlapping segments, computing a modified periodogram for each segment and averaging the periodograms.
+#https://docs.scipy.org/doc/scipy-0.14.0/reference/generated/scipy.signal.welch.html
+
+
+#Issues 
+#Heart obscured and picks up blood vessels
+#differences in illumination between frames (flickering)
