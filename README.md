@@ -16,18 +16,19 @@ This installs all the python dependencies.
 Code will run on Linux and MacOS, I'd recommend installing an Ubuntu Virtual Machine if you have a Windows PC such as with [VirtualBox](https://www.virtualbox.org/).
 
 
+## Usage
 ```
 usage: python segment_heart.py [-h] -i INDIR [-t FRAME_FORMAT] -w WELL [-l LOOP] [--crop] [--no-crop] [-f FPS] -o OUT
 
 -i Need to specify directory with a tiff or jpeg subdirectory
 -w Specify the well e.g. WE00001
 -l specify acquistion loop e.g. LO001
+-t specifies if frames are tiff or jpeg
 --crop or --no-crop to specify whether or not frames need to be cropped
 -f can optionally specify fps, otherise worked out in script
 -o Output directory for analyses
 ```
 
-## Usage
 Python script run by the shell script that supplies parameters.
 
 Example data in `test_data` directory.
