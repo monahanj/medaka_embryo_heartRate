@@ -37,7 +37,7 @@ example run:
 ```
 source activate medaka_env #activates analysis env 
 
-python segment_heart.py -i test_data -w WE00001 -l LO001 --no-crop -t jpeg -o analyses/test_data
+python3 segment_heart.py -i test_data -w WE00001 -l LO001 --no-crop -t jpeg -o analyses/test_data
 ```
 
 This would analyse `jpegs` from well `WE00001`, loop `LO001` in the `test_data` directory.
