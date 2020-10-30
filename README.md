@@ -20,12 +20,16 @@ usage: python segment_heart.py [-h] -i INDIR [-t FRAME_FORMAT] -w WELL [-l LOOP]
 
 Python script run by the shell script that supplies parameters.
 
-example:
+Example data in `test_data` directory.
+
+example run:
 ```
 python segment_heart.py -i test_data -w WE00001 -l LO001 --no-crop -t jpeg -o analyses/test_data
 ```
 
 This would analyse `jpegs` from well `WE00001`, loop `LO001`.
 
-Necessary to create an "environment" using .yml file e.g. with Conda https://docs.conda.io/en/latest/ 
+It is advisable that you create an "environment" using the .yml file e.g. with Conda <https://docs.conda.io/en/latest>
+
 This installs all the python dependencies.
+
