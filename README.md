@@ -29,7 +29,9 @@ python segment_heart.py -i test_data -w WE00001 -l LO001 --no-crop -t jpeg -o an
 
 This would analyse `jpegs` from well `WE00001`, loop `LO001`.
 
-It is advisable that you create an "environment" using the .yml file e.g. with [Conda](https://docs.conda.io/en/latest)
+It is advisable that you create an "environment" using the .yml file e.g. with [Conda](https://docs.conda.io/en/latest).
 
 This installs all the python dependencies.
+
+Code will run on Linux and MacOS, I'd recommend installing an Ubuntu Virtual Machine if you have a Windows PC such as with [VirtualBox](https://www.virtualbox.org/).
 
