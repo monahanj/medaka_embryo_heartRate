@@ -815,47 +815,67 @@ def PixelFreqs(frequencies, figsize = (10,7), heart_range = (0.5, 5)):
 
 	sns.set_style('white')
 	ax = plt.subplot()
+	
+	peak_variance = np.var(frequencies)
+	#Deal with very homogeneous array of Fourier Peaks,
+	#otherwise variance will be too small for KDE.
+	#Needs to be greater than 0
+	if peak_variance < 0.0001:
 
-	#Detect most common Fourier Peak using Kernel Density Estimation (KDE)
-	density = gaussian_kde(frequencies)
-	xs = np.linspace(heart_range[0],heart_range[-1],500)
-	ys = density(xs)
+		#Take mode of (homogeneous) array to be the heart rate
+		median_peaks = np.median(frequencies)
+		bpm = median_peaks * 60
 
-	#Plot KDE 
-	_ = sns.kdeplot(frequencies, ax = ax, fill=True)#, bw_adjust=.5)
-	_ = ax.set_title("Pixel Fourier Transform Maxima")
-	_ = ax.set_xlabel('Frequency (Hz)')
-	_ = ax.set_ylabel('Density')
-	# Only plot within heart range (in Hertz)
-	_ = ax.set_xlim(heart_range)
+                #Plot Histogram
+		_ = sns.histplot(frequencies, ax = ax, fill=True, stat = 'density')#,binwidth = 0.05)
 
-	#Calculate bpm from most common Fourier peak
-	max_index = np.argmax(ys)
-	max_x = xs[max_index]
-	max_y = ys[max_index]
-
-	#Peak Calling 
-	#prominence filters out 'flat' KDEs, 
-	#these result from a noisy signal 
-	peaks, _ = find_peaks(ys, prominence = 0.5)
-
-	#print(xs[peaks])
-	#print(ys[peaks])
-
-	if len(peaks) > 0:
-
-		bpm = max_x * 60
-		bpm = np.around(bpm, decimals=2)
-
-		#Prepare label for plot
-		bpm_label = str(int(bpm)) + " bpm"
-
-		#Label plot with bpm
-		_ = ax.plot(max_x,max_y, 'bo', ms=10)
-		_ = ax.annotate(bpm_label, xy=(max_x, max_y), xytext=(max_x + (max_x * 0.1), max_y + (max_y * 0.01)), arrowprops=dict(facecolor='black', shrink=0.05))
+		_ = ax.set_title("Pixel Fourier Transform Maxima")
+		_ = ax.set_xlabel('Frequency (Hz)')
+		_ = ax.set_ylabel('Density')
+		# Only plot within heart range (in Hertz)
+		_ = ax.set_xlim(heart_range)
 
 	else:
-		bpm = "NA"
+		#Detect most common Fourier Peak using Kernel Density Estimation (KDE)
+		density = gaussian_kde(frequencies)
+		xs = np.linspace(heart_range[0],heart_range[-1],500)
+		ys = density(xs)
+
+		#Plot KDE 
+		_ = sns.kdeplot(frequencies, ax = ax, fill=True)#, bw_adjust=.5)
+		_ = ax.set_title("Pixel Fourier Transform Maxima")
+		_ = ax.set_xlabel('Frequency (Hz)')
+		_ = ax.set_ylabel('Density')
+		# Only plot within heart range (in Hertz)
+		_ = ax.set_xlim(heart_range)
+
+		#Calculate bpm from most common Fourier peak
+		max_index = np.argmax(ys)
+		max_x = xs[max_index]
+		max_y = ys[max_index]
+
+		#Peak Calling 
+		#prominence filters out 'flat' KDEs, 
+		#these result from a noisy signal 
+		peaks, _ = find_peaks(ys, prominence = 0.5)
+
+		#print(xs[peaks])
+		#print(ys[peaks])
+
+		if len(peaks) > 0:
+
+			bpm = max_x * 60
+			bpm = np.around(bpm, decimals=2)
+
+			#Prepare label for plot
+			bpm_label = str(int(bpm)) + " bpm"
+
+			#Label plot with bpm
+			_ = ax.plot(max_x,max_y, 'bo', ms=10)
+			_ = ax.annotate(bpm_label, xy=(max_x, max_y), xytext=(max_x + (max_x * 0.1), max_y + (max_y * 0.01)), arrowprops=dict(facecolor='black', shrink=0.05))
+
+		else:
+			bpm = "NA"
 
 	return(ax, bpm)
 
