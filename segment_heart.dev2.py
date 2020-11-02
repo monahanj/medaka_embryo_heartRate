@@ -826,14 +826,21 @@ def PixelFreqs(frequencies, figsize = (10,7), heart_range = (0.5, 5)):
 		median_peaks = np.median(frequencies)
 		bpm = median_peaks * 60
 
+		#Prepare label for plot
+		bpm_label = str(int(bpm)) + " bpm"
+
+		hist_height = max([h.get_height() for h in sns.histplot(frequencies, stat = 'density', bins = 500).patches])
+
                 #Plot Histogram
-		_ = sns.histplot(frequencies, ax = ax, fill=True, stat = 'density')#,binwidth = 0.05)
+		_ = sns.histplot(frequencies, ax = ax, fill=True, stat = 'density',bins = 500)
 
 		_ = ax.set_title("Pixel Fourier Transform Maxima")
 		_ = ax.set_xlabel('Frequency (Hz)')
 		_ = ax.set_ylabel('Density')
 		# Only plot within heart range (in Hertz)
 		_ = ax.set_xlim(heart_range)
+
+		_ = ax.annotate(bpm_label, xy=(median_peaks, hist_height), xytext=(median_peaks + (median_peaks * 0.1), hist_height + (hist_height * 0.01)), arrowprops=dict(facecolor='black', shrink=0.05))
 
 	else:
 		#Detect most common Fourier Peak using Kernel Density Estimation (KDE)
