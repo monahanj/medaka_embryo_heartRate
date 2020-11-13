@@ -23,13 +23,13 @@ I would suggest that data per plate is organised with subdirectories as such:
 plate
     |
     |
-    ----condition/run 1 (e.g. @ 21C)
+     ---condition/run 1 (e.g. @ 21C)
     |
     |
-    ----condition 2 (e.g. @ 28C)
+     ---condition 2 (e.g. @ 28C)
     |
     |
-    ----condition 3 (e.g. @ 35C)
+     ---condition 3 (e.g. @ 35C)
 ```
 
 ## Usage
