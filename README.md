@@ -15,6 +15,22 @@ This installs all the python dependencies.
 
 Code will run on Linux and MacOS, I'd recommend installing an Ubuntu Virtual Machine if you have a Windows PC such as with [VirtualBox](https://www.virtualbox.org/).
 
+## Data structure
+
+I would suggest that data per plate is organised with subdirectories as such:
+
+```
+plate
+    |
+    |
+    ----condition/run 1 (e.g. @ 21C)
+    |
+    |
+    ----condition 2 (e.g. @ 28C)
+    |
+    |
+    ----condition 3 (e.g. @ 35C)
+```
 
 ## Usage
 ```
