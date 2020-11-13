@@ -30,7 +30,7 @@ matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 import seaborn as sns
 
-from collections import Counter
+from collections import Counter,OrderedDict
 
 import warnings
 warnings.filterwarnings("ignore", category=SyntaxWarning)
@@ -291,19 +291,28 @@ def diffFrame(frame, frame2_blur, frame1_blur, min_area = 300):
 	#Absolute difference between frames
 	diff = cv2.absdiff(frame2_blur, frame1_blur)
 
-	#Triangle thresholding on differences
-	triangle = threshold_triangle(diff)
-	thresh = diff > triangle
-	thresh = thresh.astype(np.uint8)
+	#Make sure there are differences...
+#	sum_diff = np.sum(diff)
+#	if sum_diff > 0:
+	try:
 
-	#Opening to remove noise
-	thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+		#Triangle thresholding on differences
+		triangle = threshold_triangle(diff)
+		thresh = diff > triangle
+		thresh = thresh.astype(np.uint8)
 
-	#Find contours in mask and filter them based on their area
-	mask = filterMask(mask = thresh, min_area = min_area)
+		#Opening to remove noise
+		thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
 
-	#Mask frame
-	masked_frame = maskFrame(frame, mask)
+		#Find contours in mask and filter them based on their area
+		mask = filterMask(mask = thresh, min_area = min_area)
+
+		#Mask frame
+		masked_frame = maskFrame(frame, mask)
+
+	except ValueError:
+		masked_frame = frame
+		thresh = diff
 
 	#Return the masked frame, the filtered mask and the absolute differences for the 2 frames
 	#return masked_frame, mask, thresh
@@ -1051,6 +1060,7 @@ imgs_meta = imgs_meta.reset_index(drop=True)
 #('WE00048', 'LO001', 'SL117')
 #('D01', 'LO001', 'SL117')
 sorted_frames = []
+frame_dict = {}
 sorted_times = []
 #for index,row in loop_meta.iterrows():
 for index,row in imgs_meta.iterrows():
@@ -1080,17 +1090,24 @@ for index,row in imgs_meta.iterrows():
 			#crop_img = img[y1 : y2, x1: x2]
 			crop_img = img[crop_values[1] : crop_values[3], crop_values[0] : crop_values[2]]
 
-			sorted_frames.append(crop_img)
-
+		#	sorted_frames.append(crop_img)
+			frame_dict[time] = crop_img
 			height, width, layers = crop_img.shape
 		else:
-			sorted_frames.append(img)
+		#	sorted_frames.append(img)
+			frame_dict[time] = img
 			height, width, layers = img.shape
 
 		size = (width,height)
 
 	else:
-                sorted_frames.append(None)
+                #sorted_frames.append(None)
+		frame_dict[time] = None
+
+#Remove duplicate time stamps, 
+#same frame can have been saved more than once
+sorted_times = list(OrderedDict.fromkeys(sorted_times)) 
+sorted_frames = [frame_dict[time] for time in sorted_times]
 
 #Only process if less than 5% frames are empty
 if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
