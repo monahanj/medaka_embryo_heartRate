@@ -41,7 +41,7 @@ usage: python segment_heart.py [-h] -i INDIR [-t FRAME_FORMAT] -w WELL [-l LOOP]
 -l specify acquistion loop e.g. LO001
 -t specifies if frames are tiff or jpeg
 --crop or --no-crop to specify whether or not frames need to be cropped
--f can optionally specify fps, otherise worked out in script
+-f can optionally specify fps, otherwise worked out in script
 -o Output directory for analyses
 ```
 
