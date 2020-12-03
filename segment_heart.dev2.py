@@ -15,7 +15,7 @@ import skimage
 from skimage.util import img_as_ubyte, img_as_float
 from skimage.filters import threshold_triangle, threshold_yen 
 from skimage.measure import label
-from skimage.metrics import structural_similarity
+#from skimage.metrics import structural_similarity
 from skimage import color, feature
 
 import scipy
@@ -1114,14 +1114,15 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 	#Determine frame rate from time-stamps if unspecified 
 	if args.fps:
-		fps = int(args.fps)
+		fps = float(args.fps)
 	else:
 		#total time acquiring frames in seconds
 		timestamp0 = sorted_times[0]
 		timestamp_final = sorted_times[-1]
 	
 		total_time = (timestamp_final - timestamp0) / 1000 
-		fps = int(len(sorted_times) / round(total_time))
+		#fps = int(len(sorted_times) / round(total_time))
+		fps = len(sorted_times) / total_time
 
 	#Normalise intensities across frames by max pixel if tiff images
 	if frame_format == "tiff":
@@ -1324,18 +1325,25 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		minBPM = 60 # 1 hz
 		maxBPM = 300 # 5 hz
 
-		times = np.asarray(times, dtype=float)
 		y = np.asarray(list(cvs.values()), dtype=float)
 
 		#Get indices of na values
 		na_values = np.isnan(y)
 		empty_frames = [i for i, x in enumerate(na_values) if x]
 
-		frame2frame = 1 / fps
+		#Calculate fresh time domain if fps parameter was specified
+		#To overcome any issues with the timestamp generation
+		if args.fps:
+			frame2frame = 1 / fps
+			final_time = frame2frame * len(times)
+			times = np.arange(start=0, stop=final_time, step=frame2frame) 
+		else:
+			times = np.asarray(times, dtype=float)
+			frame2frame = np.mean(np.diff(times))
 
-		#Time domain
-		increment = np.mean(np.diff(times)) / 6
-		td = np.arange(times[0], times[-1] + increment, increment)
+		#Time domain for interpolation
+		increment = frame2frame / 6
+		td = np.arange(start=times[0], stop=times[-1] + increment, step=increment)
 
 		#Filter, detrend and interpolate region signal
 		times_final, y_final, cs = interpolate_signal(times, y, empty_frames)
