@@ -34,14 +34,16 @@ plate
 
 ## Usage
 ```
-usage: python segment_heart.py [-h] -i INDIR [-t FRAME_FORMAT] -w WELL [-l LOOP] [--crop] [--no-crop] [-f FPS] -o OUT
+usage: python segment_heart.py [-h] -i INDIR [-t FRAME_FORMAT] -w WELL [-l LOOP] [--crop] [--no-crop] [-f FPS] [--slow-mode] [-p THREADS] -o OUT
 
--i Need to specify directory with a tiff or jpeg subdirectory
--w Specify the well e.g. WE00001
--l specify acquistion loop e.g. LO001
--t specifies if frames are tiff or jpeg
---crop or --no-crop to specify whether or not frames need to be cropped
--f can optionally specify fps, otherwise worked out in script
+-i Need to specify directory with a tiff or jpeg subdirectory.
+-w Specify the well e.g. WE00001.
+-l specify acquisition loop e.g. LO001.
+-t specifies if frames are tiff or jpeg.
+--crop or --no-crop to specify whether or not frames need to be cropped.
+-f can optionally specify fps, otherwise worked out in script.
+--slow-mode Performs Fourier Transform on every pixel in parallel.
+-p number of threads used for parallel Fourier Transforms.
 -o Output directory for analyses
 ```
 
@@ -58,5 +60,5 @@ python3 segment_heart.py -i test_data -w WE00001 -l LO001 --no-crop -t jpeg -o a
 
 This would analyse `jpegs` from well `WE00001`, loop `LO001` in the `test_data` directory.
 
-Results will be in `analyses/test_data`.
+Results would be in `analyses/test_data`.
 
