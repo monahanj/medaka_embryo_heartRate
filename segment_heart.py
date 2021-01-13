@@ -30,6 +30,10 @@ matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 import seaborn as sns
 
+#Parallelisation
+from joblib import Parallel, delayed
+import multiprocessing
+
 from collections import Counter,OrderedDict
 
 import warnings
@@ -48,7 +52,9 @@ parser.add_argument('-w','--well', action="store", dest='well', help='Well Id', 
 parser.add_argument('-l','--loop', action="store", dest='loop', help='Well frame acquistion loop', default=None, required = False)
 parser.add_argument('--crop', dest='crop', action='store_true')
 parser.add_argument('--no-crop', dest='crop', action='store_false')
+parser.add_argument('--slow-mode', dest='slowmode', default=False, action='store_true')
 parser.add_argument('-f','--fps', action="store", dest='fps', help='Frames per second', default=False, required = False)
+parser.add_argument('-p','--threads', action="store", dest='threads', help='Threads to use', default=1, required = False)
 parser.add_argument('-o','--out', action="store", dest='out', help='Output', default=False, required = True)
 parser.set_defaults(feature=True)
 args = parser.parse_args()
@@ -58,8 +64,19 @@ frame_format = args.frame_format
 well_number = args.well
 loop = args.loop
 crop = args.crop
+threads = int(args.threads)
+slow_mode = args.slowmode
 out_dir = args.out
 
+#Number of threads must not exceed available cores
+num_cores = multiprocessing.cpu_count()
+#Check that enough cores for parallelisation
+if num_cores > 1:
+	if threads > num_cores:
+		threads = num_cores
+else:
+	slow_mode = False
+	
 #All images in subdirs, one level below if tiff, 2 below if jpeg
 #If multiple loops
 if args.loop:
@@ -105,9 +122,13 @@ def detectEmbryo(frame):
 	img_grey = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
 
 	#Edge detection
-	edges = cv2.Canny(img_grey, 100, 200)
+	edges = feature.canny(img_as_float(img_grey), sigma=3)
+	#edges = feature.canny(img_as_float(img_grey), sigma=2)
+	edges = img_as_ubyte(edges)
 
+#	edges = cv2.Canny(img_grey, 100, 200)
 
+	#Circle detection
 	circles = cv2.HoughCircles(edges, cv2.HOUGH_GRADIENT, 1, 150, param1=50, param2=30)
 
 	#If fails to detect embryo following edge detection, 
@@ -166,17 +187,64 @@ def detectEmbryo(frame):
 
 	return(circle, x1, y1, x2, y2)
 
+#Convert all frames in a list into greyscale 
+def greyFrames(frames):
+
+	grey_frames = []
+	for frame in frames:
+
+		#Check that frame exists
+		if (frame is not None) and (frame.size > 0):
+
+			#Convert RGB to greyscale
+			grey_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+			
+		else:
+			grey_frame = frame
+
+		grey_frames.append(grey_frame)
+
+	return(grey_frames)
+
+#Uniformly resize frames based on common scaling factor e.g. 50, will halve size
+def resizeFrames(frames, scale = 50):
+
+	resized_frames = []
+	for frame in frames:
+
+		#Check that frame exists
+		if (frame is not None) and (frame.size > 0):
+
+			width = int(frame.shape[1] * scale / 100)
+			height = int(frame.shape[0] * scale / 100)
+			dim = (width, height)
+
+			#Resize frame based on intrpolated pixels values
+			#Increase frame size
+			if scale > 100:
+				resized = cv2.resize(frame, dim, interpolation=cv2.INTER_LINEAR)
+			#Reduce frame size
+			else:
+				resized = cv2.resize(frame, dim, interpolation=cv2.INTER_AREA)
+
+		else:
+			resized = None
+
+		resized_frames.append(resized)
+
+	return(resized_frames)
+
 #Normalise across frames to harmonise intensities (& possibly remove flickering)
 def normVideo(frames):
 
-	# Satrt at first non-empty frame
+	# Start at first non-empty frame
 #	first_frame = next(x for x, frame in enumerate(frames) if frame is not None)
 #	for i in range(first_frame, len(frames)):
 	for i in range(len(frames)):
 
 		frame = frames[i]
 
-		if frame is not None:
+		if (frame is not None) and (frame.size > 0):
 
 			#Convert RGB to greyscale
 			frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -189,12 +257,12 @@ def normVideo(frames):
 				filtered_frames = np.asarray(frame) 
 
 	norm_frames = [] 
-	##Divide by max to try and remove flickering between frames
+	#Divide by max to try and remove flickering between frames
 	for i in range(len(frames)):
 
 		frame = frames[i]
 
-		if frame is not None:
+		if (frame is not None) and (frame.size > 0):
 
 			#Convert RGB to greyscale
 			frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -454,29 +522,6 @@ def qc_mask_contours(heart_roi):
 		#Calculate ratio between area of intersection and contour area 
 		pixel_ratio = overlap_pixels / contour_pixels
 
-#		contour_area =  cv2.contourArea(test_contour)
-	
-		#Calculate minimum area parallelogram that encloses the contoured area
-	        #centre, size, angle = cv2.minAreaRect(test_contour)
-		#(x, y), (width, height), angle = cv2.minAreaRect(test_contour)
-#		rect = cv2.minAreaRect(test_contour)
-#		_, (l1, l2), _ = rect
-
-		#Take the longer length to be the height
-#		if l1 >= l2:
-#			height = l1
-#			width = l2
-#		else:
-#			height = l2
-#			width = l1
-
-#		rect_area = width * height
-
-		#Ratio of contoured area to the area of the minimal-sized rectangle enclosing it.
-#		area_ratio = contour_area / rect_area
-
-		#Ratio of width to height
-#		aspect_ratio = float(width) / float(height)
 
 		#Take all regions that overlap with 80%+ of the 250 most changeable pixels or 
 		#those in which these pixels comprise at least 5% of the pixels in the contoured region
@@ -761,64 +806,119 @@ def PixelSignal(grey_frames):
 	return(pixel_signals)
 
 #Plot multiple pixel signal intensities on same graph
-def PixelFourier(pixel_signals, times, empty_frames, pixel_num = 1000, heart_range = (0.5, 5)):
+def PixelFourier(pixel_signals, times, empty_frames, frame2frame, pixel_num = None, heart_range = (0.5, 5), plot = False):
 
 	"""
 	Plot multiple pixel signal intensities on same graph
 	* pixel_signals DICT
 		Dictionary of pixel signal intensities
 	"""
-	ax = plt.subplot()
+
+	increment = frame2frame / 6
+	td = np.arange(start=times[0], stop=times[-1] + increment, step=increment)
 
 	#Randomly select N pixels in to determine heart-rate from 
-	#Limit to 1000 pixels in interest of speed
-	if len(pixel_signals) > 1000:
+	#Limit to N pixels in interest of speed
+	if pixel_num is not None:
+		if len(pixel_signals) >= pixel_num:
 
-		#Set seed
-		random.seed(42)
+			#Set seed
+			random.seed(42)
 
-		#Select 1000 (pseudo-)random pixels
-		selected_pixels = random.sample(list(pixel_signals.keys()), k= 1000)
+			#Select 1000 (pseudo-)random pixels
+			selected_pixels = random.sample(list(pixel_signals.keys()), k= 1000)
+		else:
+			selected_pixels = list(pixel_signals.keys())
+
+	#If number of pixels not specified, calculate for all pixels
 	else:
 		selected_pixels = list(pixel_signals.keys())
+	
+	if plot is True:
 
-	highest_freqs = []
-	#Plot signals for selected pixels
-	for pixel in selected_pixels:
+		ax = plt.subplot()
 
-		pixel_signal = pixel_signals[pixel]
+		# Only plot within heart range (in Hertz)
+		_ = ax.set_xlim(heart_range)
 
-		#Remove values from empty frames
-		signal_filtered = np.delete(pixel_signal, empty_frames)
-		times_filtered = np.delete(times, empty_frames)
+		_ = ax.set_xlabel('Frequency (Hz)')
+		_ = ax.set_ylabel('Power Spectra')
 
-		#Fourier on pixel signal
-		norm = CubicSpline(times_filtered, signal_filtered)
-		psd, freqs, _, _ = fourierHR(norm, times)
+		highest_freqs = []
+		#Plot signals for selected pixels
+		for pixel in selected_pixels:
 
-		#Determine the peak within the heart range
-		heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))[0]
+			pixel_signal = pixel_signals[pixel]
 
-		#Spectra within heart range
-		heart_psd = psd[heart_indices]
-		heart_freqs = freqs[heart_indices]
+			#Remove values from empty frames
+			signal_filtered = np.delete(pixel_signal, empty_frames)
+			times_filtered = np.delete(times, empty_frames)
 
-		#Index of largest spectrum in heart range
-		index_max = np.argmax(heart_psd)
-		#Corresponding frequency
-		highest_freq = heart_freqs[index_max]
-		highest_freqs.append(highest_freq)
+			#Cubic Spline Interpolation
+			cs = CubicSpline(times_filtered, signal_filtered)
+			norm_cs = detrendSignal(cs, td, window_size = 27)
 
-		#Plot frequency of Fourier Power Spectra
-		_ = ax.plot(freqs,psd, color='grey', alpha=0.5)
+			#Fourier on interpolated pixel signal
+			psd, freqs, _, _ = fourierHR(norm_cs, td)
 
-	# Only plot within heart range (in Hertz)
-	_ = ax.set_xlim(heart_range)
+			#Determine the peak within the heart range
+			heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))[0]
 
-	_ = ax.set_xlabel('Frequency (Hz)')
-	_ = ax.set_ylabel('Power Spectra')
+			#Spectra within heart range
+			heart_psd = psd[heart_indices]
+			heart_freqs = freqs[heart_indices]
 
-	return(ax, highest_freqs)
+			#Index of largest spectrum in heart range
+			index_max = np.argmax(heart_psd)
+			#Corresponding frequency
+			highest_freq = heart_freqs[index_max]
+			highest_freqs.append(highest_freq)
+                
+			#Plot frequency of Fourier Power Spectra
+			_ = ax.plot(freqs,psd, color='grey', alpha=0.5)
+
+		return(ax, highest_freqs)
+
+	else:
+		highest_freqs = Parallel(n_jobs=threads, prefer="threads")(delayed(PixelNorm)(pixel, pixel_signals, empty_frames, heart_range) for pixel in selected_pixels)
+
+		return(highest_freqs)
+	
+def PixelNorm(pixel, pixel_signals, empty_frames, heart_range, plot = False):
+	
+	pixel_signal = pixel_signals[pixel]
+
+	#Remove values from empty frames
+	signal_filtered = np.delete(pixel_signal, empty_frames)
+	times_filtered = np.delete(times, empty_frames)
+
+	#Cubic Spline Interpolation
+	cs = CubicSpline(times_filtered, signal_filtered)
+	norm_cs = detrendSignal(cs, td, window_size = 27)
+
+	#Fourier on interpolated pixel signal
+	psd, freqs, _, _ = fourierHR(norm_cs, td)
+
+	#Determine the peak within the heart range
+	heart_indices = np.where(np.logical_and(freqs >= heart_range[0], freqs <= heart_range[1]))[0]
+
+	#Spectra within heart range
+	heart_psd = psd[heart_indices]
+	heart_freqs = freqs[heart_indices]
+
+	#Index of largest spectrum in heart range
+	index_max = np.argmax(heart_psd)
+	#Corresponding frequency
+	highest_freq = heart_freqs[index_max]
+
+#	cs_psd = CubicSpline(freqs, psd)
+
+	#Plot pixel PSD
+#	if plot is True:
+		#Plot pixel PSD
+#		_ = ax.plot(freqs, psd, color='grey', alpha=0.5)
+
+	return(highest_freq)
 
 def PixelFreqs(frequencies, figsize = (10,7), heart_range = (0.5, 5)):
 
@@ -901,6 +1001,9 @@ def PixelFreqs(frequencies, figsize = (10,7), heart_range = (0.5, 5)):
 #<0 returns the image as is. This will return a 16 bit image.
 imgs = {}
 imgs_meta = {}  
+circle_x = {}
+circle_y = {}
+circle_radii = {}
 sizes = {}
 crop_params = {}
 raw_frames = []
@@ -971,23 +1074,26 @@ for frame in well_frames:
 		#8-bit, 3 channel image
 		img = cv2.imread(frame,1)
 
-		#Crop if necessary based on centre of embryo
-		#Detects embryo with Hough Circle Detection
-		if crop is True:
+		#Detect embryo with Hough Circle Detection
+		# Circle coords, can be used as cropping parameters
+		circle, x1, y1, x2, y2 = detectEmbryo(img)
 
-			# cropping parameters
-			circle, x1, y1, x2, y2 = detectEmbryo(img)
+		#crop_img = img[y1:y2, x1:x2]
+		crop_size = (x2 - x1) * (y2 - y1)
+		crop_id = (plate_pos, loop, crop_size)
+		crop_params[crop_id] = [x1, y1, x2, y2]
 
-			#crop_img = img[y1:y2, x1:x2]
-			crop_size = (x2 - x1) * (y2 - y1)
-			crop_id = (plate_pos, loop, crop_size)
-			crop_params[crop_id] = [x1, y1, x2, y2]
+		try:
+			sizes[well_id].append(crop_size)
+			circle_x[well_id].append(circle[0])
+			circle_y[well_id].append(circle[1])
+			circle_radii[well_id].append(circle[2])
 
-			try:
-				sizes[well_id].append(crop_size)
-	
-			except KeyError:
-				sizes[well_id] = [crop_size]
+		except KeyError:
+			sizes[well_id] = [crop_size]
+			circle_x[well_id] = [circle[0]]
+			circle_y[well_id] = [circle[1]]
+			circle_radii[well_id] = [circle[2]]
 
 	#if image empty
 	else:
@@ -1024,7 +1130,41 @@ except OSError as e:
 first = next(x for x, frame in enumerate(raw_frames) if frame is not None)
 img_out = raw_frames[first].copy()
 
-#Crop if a tiff
+#Embryo Circle
+for well_id in circle_x.keys():
+
+	x_coord = circle_x[well_id]
+	y_coord = circle_y[well_id]
+	radius = circle_radii[well_id]
+
+	x_counts = Counter(x_coord)
+	y_counts = Counter(y_coord)
+	rad_counts = Counter(radius)
+
+	#Use most common circle coords for the embryo
+	embryo_x, _ = x_counts.most_common(1)[0]
+	embryo_y, _ = y_counts.most_common(1)[0]
+	embryo_rad, _ = rad_counts.most_common(1)[0]
+
+circle[0] = embryo_x
+circle[1] = embryo_y
+circle[2] = embryo_rad
+ 
+# Draw the center of the circle
+cv2.circle(img_out,(circle[0],circle[1]),2,(0,255,0),3)
+# Draw the circle
+cv2.circle(img_out,(circle[0],circle[1]),circle[2],(0,255,0),2)
+
+out_fig = out_dir + "/embryo.original.png"
+plt.imshow(img_out)
+plt.title('Original Frame', fontsize=10)
+plt.axis('off')
+plt.savefig(out_fig,bbox_inches='tight')
+plt.close()
+
+#Mask embryo in frame
+
+#Crop if necessary based on detection of embryo with Hough Circle Method
 if crop is True:
 
 	#Uniformly crop image per loop per well based on the circle radii + offset
@@ -1033,21 +1173,10 @@ if crop is True:
 
 		size = sizes[well_id]
 		dimension_counts = Counter(size)
+
 		frame_size, _ = dimension_counts.most_common(1)[0]
 		crop_id = well_id + (frame_size,)
 		well_crop_params[well_id] = crop_params[crop_id]
-
-	# Draw the center of the circle
-	cv2.circle(img_out,(circle[0],circle[1]),2,(0,255,0),3)
-	# Draw the circle
-	cv2.circle(img_out,(circle[0],circle[1]),circle[2],(0,255,0),2)
-
-out_fig = out_dir + "/embryo.original.png"
-plt.imshow(img_out)
-plt.title('Original Frame', fontsize=10)
-plt.axis('off')
-plt.savefig(out_fig,bbox_inches='tight')
-plt.close()
 
 # creating a dataframe from a dictionary 
 imgs_meta = pd.DataFrame(imgs_meta)
@@ -1077,9 +1206,9 @@ for index,row in imgs_meta.iterrows():
 
 	well_id = (well, loop)
 
-	#To deal with empty frames
 	if img is not None:
 
+		#Crop if necessary based on detection of embryo with Hough Circle Method
 		#Use cropping parameters to uniformly crop frames
 		if crop is True:
 
@@ -1090,18 +1219,15 @@ for index,row in imgs_meta.iterrows():
 			#crop_img = img[y1 : y2, x1: x2]
 			crop_img = img[crop_values[1] : crop_values[3], crop_values[0] : crop_values[2]]
 
-		#	sorted_frames.append(crop_img)
 			frame_dict[time] = crop_img
 			height, width, layers = crop_img.shape
 		else:
-		#	sorted_frames.append(img)
 			frame_dict[time] = img
 			height, width, layers = img.shape
 
 		size = (width,height)
 
 	else:
-                #sorted_frames.append(None)
 		frame_dict[time] = None
 
 #Remove duplicate time stamps, 
@@ -1239,7 +1365,7 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		#Draw contours of heart
 		for i in range(len(embryo)):
 
-			raw_frame = sorted_frames[i]
+			#raw_frame = sorted_frames[i]
 			frame = embryo[i]
 
 			if frame is not None:
@@ -1351,19 +1477,42 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 
 		#Signal per pixel
 		pixel_signals = PixelSignal(masked_frames)
-		#Perform Fourier Transform on each pixel in segmented area
-		out_fourier = out_dir + "/pixel_fourier.png"
-		fig, ax = plt.subplots(figsize=(10, 7))
-		ax, highest_freqs = PixelFourier(pixel_signals, times, empty_frames, pixel_num = 1000)
-		plt.savefig(out_fourier)
-		plt.close()
+
+		#All pixels
+		norm_frames_grey = greyFrames(norm_frames)
+		#Resize frames to make faster
+		norm_frames_grey = resizeFrames(norm_frames_grey, scale = 50)
+		#Signal for every pixel
+		all_pixel_sigs = PixelSignal(norm_frames_grey)
+
+		#Run normally, Fourier in segemented area
+		if slow_mode is not True:
+			#Perform Fourier Transform on each pixel in segmented area
+			out_fourier = out_dir + "/pixel_fourier.png"
+			fig, ax = plt.subplots(figsize=(10, 7))
+			ax, highest_freqs = PixelFourier(pixel_signals, times, empty_frames, frame2frame, pixel_num = 1000, plot = True)
+			plt.savefig(out_fourier)
+			plt.close()
 		
-		#Plot the density of fourier transform global maxima across pixels
-		out_fourier2 = out_dir + "/pixel_rate.png"
-		fig, ax = plt.subplots(1,1,figsize=(10, 7))
-		ax, bpm_fourier = PixelFreqs(highest_freqs)
-		plt.savefig(out_fourier2)
-		plt.close()
+			#Plot the density of fourier transform global maxima across pixels
+			out_kde = out_dir + "/pixel_rate.png"
+			fig, ax = plt.subplots(1,1,figsize=(10, 7))
+			ax, bpm_fourier = PixelFreqs(highest_freqs)
+			plt.savefig(out_kde)
+			plt.close()
+
+		#Run in slow mode, Fourier on every pixel
+		else:
+			#Perform Fourier Transform on every pixel
+			highest_freqs2 = PixelFourier(all_pixel_sigs, times, empty_frames, frame2frame, plot = False)
+
+	
+			#Plot the density of fourier transform global maxima across pixels
+			out_kde2 = out_dir + "/pixel_rate_all.png"
+			fig2, ax2 = plt.subplots(1,1,figsize=(10, 7))
+			ax2, bpm_fourier = PixelFreqs(highest_freqs2)
+			plt.savefig(out_kde2)
+			plt.close()
 
 		#Calculate slope
 		#Presumably should be flat(ish) if good
@@ -1408,25 +1557,6 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
                         #Frequently issue with first few data-points
 #			to_keep = range(int(len(td) * 0.05),len(td))
 #			filtered_td = td[to_keep]
-
-			#Perform Fourier Analysis on Region
-#			psd, freqs, peak, bpm_fourier = fourierHR(norm_cs, filtered_td, heart_range)
-	
-			#Round heart rate
-#			if bpm_fourier is not None:
-#				bpm_fourier = np.around(bpm_fourier, decimals=2)
-
-			#Plot full. one-sided Fourier Transform 
-#			ax = plotFourier(psd = psd, freqs = freqs, peak = None, bpm = bpm_fourier, heart_range = None, figure_loc = 211)
-#			ax.set_title("Power spectral density of HRV")
-
-			#Plot one-sided Fourier within specified range
-#			ax = plotFourier(psd = psd, freqs = freqs, peak = peak, bpm = bpm_fourier, heart_range = heart_range, figure_loc = 212)
-#			plt.xlabel('Frequency (Hz)')
-		
-#			out_fourier = out_dir + "/bpm_power_spectra.fourier.png"
-#			plt.savefig(out_fourier)#, bbox_inches='tight')
-#			plt.close()
 
 #check heartrate was calculated
 #otherwise create variable and set to NA
