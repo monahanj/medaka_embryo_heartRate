@@ -122,6 +122,7 @@ dependencies:
     - imageio==2.6.1
     - imutils==0.5.3
     - jinja2==2.11.1
+    - joblib==1.0.0
     - kiwisolver==1.1.0
     - markupsafe==1.1.1
     - matplotlib==3.1.1
