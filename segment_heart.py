@@ -121,20 +121,22 @@ def detectEmbryo(frame):
 	#Find circle i.e. the embryo in the yolk sac 
 	img_grey = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
 
+	#Blur
+	img_grey = cv2.GaussianBlur(img_grey, (9, 9), 0)
+
 	#Edge detection
 	edges = feature.canny(img_as_float(img_grey), sigma=3)
-	#edges = feature.canny(img_as_float(img_grey), sigma=2)
 	edges = img_as_ubyte(edges)
 
 #	edges = cv2.Canny(img_grey, 100, 200)
 
 	#Circle detection
-	circles = cv2.HoughCircles(edges, cv2.HOUGH_GRADIENT, 1, 150, param1=50, param2=30)
+	circles = cv2.HoughCircles(edges, cv2.HOUGH_GRADIENT, 1, 150, param1=50, param2=30, minRadius = 150, maxRadius = 400)
 
 	#If fails to detect embryo following edge detection, 
 	#try with the original image 
 	if circles is None:
-		circles = cv2.HoughCircles(img_grey, cv2.HOUGH_GRADIENT, 1, 150, param1=50, param2=30)
+		circles = cv2.HoughCircles(img_grey, cv2.HOUGH_GRADIENT, 1, 150, param1=50, param2=30, minRadius = 150, maxRadius = 400)
 
 	if circles is not None:
 
@@ -184,6 +186,14 @@ def detectEmbryo(frame):
 		y1 = int(y1)
 		x2 = int(x2)
 		y2 = int(y2)
+
+	#No circle detected
+#	else:
+#		circle = None
+#		x1 = None
+#		y1 = None 
+#		x2 = None 
+#		y2 = None
 
 	return(circle, x1, y1, x2, y2)
 
@@ -782,7 +792,11 @@ def PixelSignal(grey_frames):
 
 	pixel_num = 0
 	pixel_signals = {}
-	rows, cols = grey_frames[0].shape
+
+	#TODO
+	#First non-empty frame
+	first = next(x for x, frame in enumerate(grey_frames) if frame is not None)
+	rows, cols = grey_frames[first].shape
 	for i in range(rows):
 		for j in range(cols):
 
@@ -879,12 +893,13 @@ def PixelFourier(pixel_signals, times, empty_frames, frame2frame, pixel_num = No
 
 		return(ax, highest_freqs)
 
+	#Run all pixels without plotting them individually
 	else:
-		highest_freqs = Parallel(n_jobs=threads, prefer="threads")(delayed(PixelNorm)(pixel, pixel_signals, empty_frames, heart_range) for pixel in selected_pixels)
+		highest_freqs = Parallel(n_jobs=threads, prefer="threads")(delayed(PixelNorm)(pixel, pixel_signals, times, empty_frames, heart_range) for pixel in selected_pixels)
 
 		return(highest_freqs)
 	
-def PixelNorm(pixel, pixel_signals, empty_frames, heart_range, plot = False):
+def PixelNorm(pixel, pixel_signals, times, empty_frames, heart_range, plot = False):
 	
 	pixel_signal = pixel_signals[pixel]
 
@@ -920,7 +935,7 @@ def PixelNorm(pixel, pixel_signals, empty_frames, heart_range, plot = False):
 
 	return(highest_freq)
 
-def PixelFreqs(frequencies, figsize = (10,7), heart_range = (0.5, 5)):
+def PixelFreqs(frequencies, figsize = (10,7), heart_range = (0.5, 5), peak_filter = True):
 
 	sns.set_style('white')
 	ax = plt.subplot()
@@ -973,10 +988,11 @@ def PixelFreqs(frequencies, figsize = (10,7), heart_range = (0.5, 5)):
 		#Peak Calling 
 		#prominence filters out 'flat' KDEs, 
 		#these result from a noisy signal 
-		peaks, _ = find_peaks(ys, prominence = 0.5)
+		if peak_filter is True:
+			peaks, _ = find_peaks(ys, prominence = 0.5)
 
-		#print(xs[peaks])
-		#print(ys[peaks])
+		else:
+			peaks, _ = find_peaks(ys, prominence = 0.1)
 
 		if len(peaks) > 0:
 
@@ -1068,11 +1084,15 @@ for frame in well_frames:
 	well_id = (plate_pos, loop)
 
 	#If frame is not empty, read it in
-	if not os.stat(frame).st_size == 0:
+#	if not os.stat(frame).st_size == 0:
+#	if frame:
+#	if not np.shape(frame) == ():
 
-		#Read image in colour
-		#8-bit, 3 channel image
-		img = cv2.imread(frame,1)
+	#Read image in colour
+	#8-bit, 3 channel image
+	img = cv2.imread(frame,1)
+
+	if img is not None:
 
 		#Detect embryo with Hough Circle Detection
 		# Circle coords, can be used as cropping parameters
@@ -1095,9 +1115,9 @@ for frame in well_frames:
 			circle_y[well_id] = [circle[1]]
 			circle_radii[well_id] = [circle[2]]
 
-	#if image empty
-	else:
-		img = None
+#	#if image empty
+#	else:
+#		img = None
 
 	raw_frames.append(img)
 	imgs[name] = img
@@ -1149,6 +1169,13 @@ for well_id in circle_x.keys():
 circle[0] = embryo_x
 circle[1] = embryo_y
 circle[2] = embryo_rad
+
+#print("radius")
+#print(embryo_rad)
+
+#circle_area =  np.pi * embryo_rad * embryo_rad
+#print("area")
+#print(circle_area)
  
 # Draw the center of the circle
 cv2.circle(img_out,(circle[0],circle[1]),2,(0,255,0),3)
@@ -1191,7 +1218,6 @@ imgs_meta = imgs_meta.reset_index(drop=True)
 sorted_frames = []
 frame_dict = {}
 sorted_times = []
-#for index,row in loop_meta.iterrows():
 for index,row in imgs_meta.iterrows():
 
 	#tiff = row['tiff']
@@ -1262,7 +1288,12 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	vid_frames = [frame for frame in norm_frames if frame is not None]
 	fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 	#fourcc = cv2.VideoWriter_fourcc(*'avc1')
-	height, width, layers = vid_frames[0].shape
+
+	try:
+		height, width, layers = vid_frames[0].shape
+	except IndexError:
+		height, width = vid_frames[0].shape
+
 	size = (width,height)
 	out_vid = out_dir + "/embryo.mp4"
 	out = cv2.VideoWriter(out_vid,fourcc, fps, size)
@@ -1273,6 +1304,11 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	embryo = []
 	#Start from first non-empty frame
 	start_frame = next(x for x, frame in enumerate(norm_frames) if frame is not None)
+	#Add None if first few frames are empty
+	empty_frames = range(start_frame)
+	for i in empty_frames:
+		embryo.append(None)
+
 	frame0 = norm_frames[start_frame]
 	embryo.append(frame0)
 
@@ -1485,8 +1521,23 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 		#Signal for every pixel
 		all_pixel_sigs = PixelSignal(norm_frames_grey)
 
+		#Run in slow mode, Fourier on every pixel
+		if slow_mode is True:
+
+			#Perform Fourier Transform on every pixel
+			highest_freqs2 = PixelFourier(all_pixel_sigs, times, empty_frames, frame2frame, plot = False)
+
+	
+			#Plot the density of fourier transform global maxima across pixels
+			out_kde2 = out_dir + "/pixel_rate_all.png"
+			fig2, ax2 = plt.subplots(1,1,figsize=(10, 7))
+			ax2, bpm_fourier = PixelFreqs(highest_freqs2, peak_filter = False)
+			plt.savefig(out_kde2)
+			plt.close()
+
 		#Run normally, Fourier in segemented area
-		if slow_mode is not True:
+		else:
+
 			#Perform Fourier Transform on each pixel in segmented area
 			out_fourier = out_dir + "/pixel_fourier.png"
 			fig, ax = plt.subplots(figsize=(10, 7))
@@ -1497,66 +1548,53 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 			#Plot the density of fourier transform global maxima across pixels
 			out_kde = out_dir + "/pixel_rate.png"
 			fig, ax = plt.subplots(1,1,figsize=(10, 7))
-			ax, bpm_fourier = PixelFreqs(highest_freqs)
+			ax, bpm_fourier = PixelFreqs(highest_freqs, peak_filter = False)
 			plt.savefig(out_kde)
 			plt.close()
 
-		#Run in slow mode, Fourier on every pixel
-		else:
-			#Perform Fourier Transform on every pixel
-			highest_freqs2 = PixelFourier(all_pixel_sigs, times, empty_frames, frame2frame, plot = False)
+			#Calculate slope
+			#Presumably should be flat(ish) if good
+			#Or fit line
+#			slope, intercept, r_value, p_value, std_err = stats.linregress(td, cs(td))
 
-	
-			#Plot the density of fourier transform global maxima across pixels
-			out_kde2 = out_dir + "/pixel_rate_all.png"
-			fig2, ax2 = plt.subplots(1,1,figsize=(10, 7))
-			ax2, bpm_fourier = PixelFreqs(highest_freqs2)
-			plt.savefig(out_kde2)
+			#Median Absolute Deviation across signal
+#			mad = stats.median_absolute_deviation(cs(td))
+
+			#Frequently issue with first few data-points
+			to_keep = range(int(len(td) * 0.05),len(td))
+			filtered_td = td[to_keep]
+
+			#Plot sigal in segmented region
+			out_fig = out_dir + "/bpm_trace.png"
+			plt.figure(figsize=(10,2))
+			plt.plot(filtered_td, cs(filtered_td))
+			plt.ylabel('Heart intensity (CoV)')
+			plt.xlabel('Time [sec]')
+			plt.hlines(y = np.mean(cs(filtered_td)), xmin = td[0], xmax = td[-1], linestyles = "dashed")
+			plt.savefig(out_fig,bbox_inches='tight')
 			plt.close()
 
-		#Calculate slope
-		#Presumably should be flat(ish) if good
-		#Or fit line
-#		slope, intercept, r_value, p_value, std_err = stats.linregress(td, cs(td))
+			#Filter out if linear regression captures signal trend well
+			#(i.e. if p-value highly significant)
+#			if (np.float64(p_value) > np.float_power(10, -8)) or (mad <= 0.02) or (np.absolute(slope) <= 0.002):
 
-		#Median Absolute Deviation across signal
-#		mad = stats.median_absolute_deviation(cs(td))
+				#Detrend and smoothe cubic spline interpolated data 
+				#with Savitzky–Golay filter
+#				norm_cs = detrendSignal(cs, td, window_size = 21)
 
-		#Frequently issue with first few data-points
-		to_keep = range(int(len(td) * 0.05),len(td))
-		filtered_td = td[to_keep]
+#				out_fig = out_dir + "/bpm_trace.savgol_filter.png"
+#				plt.figure(figsize=(10,2))
+#				plt.plot(td, norm_cs(td))
+#				plt.ylabel('Normalised Heart Signal')
+#				plt.xlabel('Time [sec]')
+#				plt.hlines(y = np.mean(norm_cs(td)), xmin = td[0], xmax = td[-1], linestyles = "dashed")
+#				plt.savefig(out_fig,bbox_inches='tight')
+#				plt.close()
 
-		#Plot sigal in segmented region
-		out_fig = out_dir + "/bpm_trace.png"
-		plt.figure(figsize=(10,2))
-		plt.plot(filtered_td, cs(filtered_td))
-		plt.ylabel('Heart intensity (CoV)')
-		plt.xlabel('Time [sec]')
-		plt.hlines(y = np.mean(cs(filtered_td)), xmin = td[0], xmax = td[-1], linestyles = "dashed")
-		plt.savefig(out_fig,bbox_inches='tight')
-		plt.close()
-
-		#Filter out if linear regression captures signal trend well
-		#(i.e. if p-value highly significant)
-#		if (np.float64(p_value) > np.float_power(10, -8)) or (mad <= 0.02) or (np.absolute(slope) <= 0.002):
-
-			#Detrend and smoothe cubic spline interpolated data 
-			#with Savitzky–Golay filter
-#			norm_cs = detrendSignal(cs, td, window_size = 21)
-
-#			out_fig = out_dir + "/bpm_trace.savgol_filter.png"
-#			plt.figure(figsize=(10,2))
-#			plt.plot(td, norm_cs(td))
-#			plt.ylabel('Normalised Heart Signal')
-#			plt.xlabel('Time [sec]')
-#			plt.hlines(y = np.mean(norm_cs(td)), xmin = td[0], xmax = td[-1], linestyles = "dashed")
-#			plt.savefig(out_fig,bbox_inches='tight')
-#			plt.close()
-
-                        #Remove first 2.5% of interpolated, detrended data-points
-                        #Frequently issue with first few data-points
-#			to_keep = range(int(len(td) * 0.05),len(td))
-#			filtered_td = td[to_keep]
+        	                #Remove first 2.5% of interpolated, detrended data-points
+                	        #Frequently issue with first few data-points
+#				to_keep = range(int(len(td) * 0.05),len(td))
+#				filtered_td = td[to_keep]
 
 #check heartrate was calculated
 #otherwise create variable and set to NA
