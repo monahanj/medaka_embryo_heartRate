@@ -121,9 +121,6 @@ def detectEmbryo(frame):
 	#Find circle i.e. the embryo in the yolk sac 
 	img_grey = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
 
-	#Blur
-	img_grey = cv2.GaussianBlur(img_grey, (9, 9), 0)
-
 	#Edge detection
 	edges = feature.canny(img_as_float(img_grey), sigma=3)
 	edges = img_as_ubyte(edges)
@@ -137,6 +134,20 @@ def detectEmbryo(frame):
 	#try with the original image 
 	if circles is None:
 		circles = cv2.HoughCircles(img_grey, cv2.HOUGH_GRADIENT, 1, 150, param1=50, param2=30, minRadius = 150, maxRadius = 400)
+
+		#try with blurred image
+		if circles is None:
+			#Blur
+			img_blur = cv2.GaussianBlur(img_grey, (9, 9), 0)
+
+			circles = cv2.HoughCircles(img_blur, cv2.HOUGH_GRADIENT, 1, 150, param1=50, param2=30, minRadius = 150, maxRadius = 400)
+			
+			#try with edges from blurred image
+			if circles is None:
+				edges2 = feature.canny(img_as_float(img_blur), sigma=3)
+				edges2 = img_as_ubyte(edges2)
+
+				circles = cv2.HoughCircles(edges2, cv2.HOUGH_GRADIENT, 1, 150, param1=50, param2=30, minRadius = 150, maxRadius = 400)
 
 	if circles is not None:
 
@@ -188,12 +199,12 @@ def detectEmbryo(frame):
 		y2 = int(y2)
 
 	#No circle detected
-#	else:
-#		circle = None
-#		x1 = None
-#		y1 = None 
-#		x2 = None 
-#		y2 = None
+	else:
+		circle = None
+		x1 = None
+		y1 = None 
+		x2 = None 
+		y2 = None
 
 	return(circle, x1, y1, x2, y2)
 
@@ -1084,36 +1095,35 @@ for frame in well_frames:
 	well_id = (plate_pos, loop)
 
 	#If frame is not empty, read it in
-#	if not os.stat(frame).st_size == 0:
-#	if frame:
-#	if not np.shape(frame) == ():
 
 	#Read image in colour
 	#8-bit, 3 channel image
 	img = cv2.imread(frame,1)
 
+	#If frame is not empty
 	if img is not None:
 
 		#Detect embryo with Hough Circle Detection
 		# Circle coords, can be used as cropping parameters
 		circle, x1, y1, x2, y2 = detectEmbryo(img)
 
-		#crop_img = img[y1:y2, x1:x2]
-		crop_size = (x2 - x1) * (y2 - y1)
-		crop_id = (plate_pos, loop, crop_size)
-		crop_params[crop_id] = [x1, y1, x2, y2]
+		if circle is not None:
+			#crop_img = img[y1:y2, x1:x2]
+			crop_size = (x2 - x1) * (y2 - y1)
+			crop_id = (plate_pos, loop, crop_size)
+			crop_params[crop_id] = [x1, y1, x2, y2]
 
-		try:
-			sizes[well_id].append(crop_size)
-			circle_x[well_id].append(circle[0])
-			circle_y[well_id].append(circle[1])
-			circle_radii[well_id].append(circle[2])
-
-		except KeyError:
-			sizes[well_id] = [crop_size]
-			circle_x[well_id] = [circle[0]]
-			circle_y[well_id] = [circle[1]]
-			circle_radii[well_id] = [circle[2]]
+			try:
+				sizes[well_id].append(crop_size)
+				circle_x[well_id].append(circle[0])
+				circle_y[well_id].append(circle[1])
+				circle_radii[well_id].append(circle[2])
+	
+			except KeyError:
+				sizes[well_id] = [crop_size]
+				circle_x[well_id] = [circle[0]]
+				circle_y[well_id] = [circle[1]]
+				circle_radii[well_id] = [circle[2]]
 
 #	#if image empty
 #	else:
@@ -1146,41 +1156,58 @@ except OSError as e:
 	if e.errno != errno.EEXIST:
 		raise
 
+#Embryo Circle
+if len(circle_x.keys()) > 0:
+	for well_id in circle_x.keys():
+	
+		x_coord = circle_x[well_id]
+		y_coord = circle_y[well_id]
+		radius = circle_radii[well_id]
+
+		if x_coord is not None: 
+	
+			x_counts = Counter(x_coord)
+			y_counts = Counter(y_coord)
+			rad_counts = Counter(radius)
+
+			#Use most common circle coords for the embryo
+			embryo_x, _ = x_counts.most_common(1)[0]
+			embryo_y, _ = y_counts.most_common(1)[0]
+			embryo_rad, _ = rad_counts.most_common(1)[0]
+
+#		else:
+#			embryo_x = None
+#			embryo_y = None
+#			embryo_rad = None
+
+else:
+	embryo_x = None
+	embryo_y = None
+	embryo_rad = None
+	
 #Save a frame image with the embryo highlighted with a circle
 first = next(x for x, frame in enumerate(raw_frames) if frame is not None)
 img_out = raw_frames[first].copy()
 
-#Embryo Circle
-for well_id in circle_x.keys():
+if circle is None:
+	circle = [0] * 3
 
-	x_coord = circle_x[well_id]
-	y_coord = circle_y[well_id]
-	radius = circle_radii[well_id]
+if embryo_x is not None:
+	circle[0] = embryo_x
+	circle[1] = embryo_y
+	circle[2] = embryo_rad
 
-	x_counts = Counter(x_coord)
-	y_counts = Counter(y_coord)
-	rad_counts = Counter(radius)
+	#print("radius")
+	#print(embryo_rad)
 
-	#Use most common circle coords for the embryo
-	embryo_x, _ = x_counts.most_common(1)[0]
-	embryo_y, _ = y_counts.most_common(1)[0]
-	embryo_rad, _ = rad_counts.most_common(1)[0]
-
-circle[0] = embryo_x
-circle[1] = embryo_y
-circle[2] = embryo_rad
-
-#print("radius")
-#print(embryo_rad)
-
-#circle_area =  np.pi * embryo_rad * embryo_rad
-#print("area")
-#print(circle_area)
+	#circle_area =  np.pi * embryo_rad * embryo_rad
+	#print("area")
+	#print(circle_area)
  
-# Draw the center of the circle
-cv2.circle(img_out,(circle[0],circle[1]),2,(0,255,0),3)
-# Draw the circle
-cv2.circle(img_out,(circle[0],circle[1]),circle[2],(0,255,0),2)
+	# Draw the center of the circle
+	cv2.circle(img_out,(circle[0],circle[1]),2,(0,255,0),3)
+	# Draw the circle
+	cv2.circle(img_out,(circle[0],circle[1]),circle[2],(0,255,0),2)
 
 out_fig = out_dir + "/embryo.original.png"
 plt.imshow(img_out)
@@ -1207,7 +1234,6 @@ if crop is True:
 
 # creating a dataframe from a dictionary 
 imgs_meta = pd.DataFrame(imgs_meta)
-#Sort by well, loop and frame 
 imgs_meta = imgs_meta.sort_values(by=['well','loop','frame_number'], ascending=[True,True,True])
 #Reindex pandas df
 imgs_meta = imgs_meta.reset_index(drop=True)
@@ -1217,6 +1243,7 @@ imgs_meta = imgs_meta.reset_index(drop=True)
 #('D01', 'LO001', 'SL117')
 sorted_frames = []
 frame_dict = {}
+crop_frame_dict = {}
 sorted_times = []
 for index,row in imgs_meta.iterrows():
 
@@ -1238,28 +1265,44 @@ for index,row in imgs_meta.iterrows():
 		#Use cropping parameters to uniformly crop frames
 		if crop is True:
 
-			#Well and loop specific parameters for cropping frame
-			#crop_params[crop_id] = [x1, y1, x2, y2]
-			crop_values = well_crop_params[well_id]
+			if well_id in well_crop_params:
+				#Well and loop specific parameters for cropping frame
+				#crop_params[crop_id] = [x1, y1, x2, y2]
+				crop_values = well_crop_params[well_id]
 
-			#crop_img = img[y1 : y2, x1: x2]
-			crop_img = img[crop_values[1] : crop_values[3], crop_values[0] : crop_values[2]]
+				#crop_img = img[y1 : y2, x1: x2]
+				crop_img = img[crop_values[1] : crop_values[3], crop_values[0] : crop_values[2]]
 
-			frame_dict[time] = crop_img
-			height, width, layers = crop_img.shape
+				crop_frame_dict[time] = crop_img
+				frame_dict[time] = img
+			else:
+				crop_frame_dict[time] = None
+				frame_dict[time] = img
 		else:
 			frame_dict[time] = img
-			height, width, layers = img.shape
-
-		size = (width,height)
 
 	else:
 		frame_dict[time] = None
+		crop_frame_dict[time] = None
 
 #Remove duplicate time stamps, 
 #same frame can have been saved more than once
 sorted_times = list(OrderedDict.fromkeys(sorted_times)) 
-sorted_frames = [frame_dict[time] for time in sorted_times]
+if crop is True:
+
+	sorted_frames = [crop_frame_dict[time] for time in sorted_times]
+	test_frames = [frame for frame in sorted_frames if frame is not None]
+
+	#Default to uncropped original if cropping failed due to 
+	#invalid embryo detection.
+	if len(test_frames) == 0:
+		sorted_frames = [frame_dict[time] for time in sorted_times]
+
+	sorted_uncropped = [frame_dict[time] for time in sorted_times]
+
+else:
+	sorted_frames = [frame_dict[time] for time in sorted_times]
+		
 
 #Only process if less than 5% frames are empty
 if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
@@ -1279,6 +1322,12 @@ if sum(frame is None for frame in sorted_frames) < len(sorted_frames) * 0.05:
 	#Normalise intensities across frames by max pixel if tiff images
 	if frame_format == "tiff":
 		norm_frames = normVideo(sorted_frames)
+		#Check if any frames are empty after normalisation
+		test_frames = [frame for frame in norm_frames if frame is not None]
+		#Defaults to uncropped original if normalisation failed due to 
+		#invalid embryo detection.
+		if len(test_frames) == 0:
+			norm_frames = normVideo(sorted_uncropped)
 
 	#jpegs already normalised
 	else:
